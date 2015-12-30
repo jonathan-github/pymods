@@ -261,9 +261,6 @@ class Object(collections.UserDict):
         root = self.treeRoot
         while root is not None:
             parent = root[0]
-            if id == 'Default Templates':
-                print("{}: looking for parent {} in {}".format(self.treePath, id, parent))
-                pass
             if parent.get('id') == id:
                 return parent
             if parent.get('name') == id:
@@ -488,10 +485,6 @@ class DAZ(Object):
             obj.nodeRef = node
             pass
         pass
-
-    def __repr__(self):
-        return objName(self.asset_info)
-    pass
 
     def refURL(self, obj):
         id = obj.get('id')
