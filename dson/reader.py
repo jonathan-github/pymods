@@ -7,6 +7,18 @@ import sys
 from . import utils
 from . import types
 
+SearchPath = []
+
+def searchPathAdd(env, path):
+    if env not in os.environ:
+        return
+    fullPath = os.environ[env].translate({ord('\\'): '/'}) + path
+    SearchPath.append(fullPath)
+    pass
+
+searchPathAdd('PUBLIC', '/Documents/My DAZ 3D Library')
+searchPathAdd('USERPROFILE', '/Documents/DAZ 3D/Studio/My Library')
+
 GZIP_MAGIC = b"\x1f\x8b\x08"
 
 def isGzipped(path):
@@ -18,11 +30,6 @@ def isGzipped(path):
     return False
 
 class Cache:
-    SearchPath = [
-        os.environ['PUBLIC'] + '/Documents/My DAZ 3D Library',
-        os.environ['USERPROFILE'] + '/Documents/DAZ 3D/Studio/My Library'
-    ]
-
     def __init__(self):
         self.cache = {}
         pass
@@ -43,16 +50,24 @@ class Cache:
                 raise Exception(
                     "{}: can't locate url".format(url)
                 )
-            obj = types.DAZ(key, self.loadFile(path))
+            obj = types.DAZ.load(self.loadFile(path))
+            obj.path = key
             self.cache[key] = obj
+            obj.refsLoad()
             if utils.verbose:
-                print(
-                    "loaded file {} = {}".format(
-                        path, utils.toJSON(obj.asset_info)
+                if utils.verbose > 2:
+                    print(
+                        "loaded file \"{}\" = {}".format(
+                            path, utils.toJSON(obj.asset_info)
+                        )
                     )
-                )
-                for asset in obj.assetMap.values():
-                    print(" asset {}".format(asset))
+                else:
+                    print("loaded file \"{}\"".format(path))
+                    pass
+                if utils.verbose > 1:
+                    for asset in obj.assets:
+                        print(" ", asset.treePath(sep=" > ", idFormat=" #{}"))
+                        pass
                     pass
                 pass
             pass
@@ -60,14 +75,14 @@ class Cache:
             obj = obj.idGet(url.fragment)
             pass
         if url.propPath:
-            obj = obj.pathGet(url.propPath)
+            obj = types.pathGet(obj, url.propPath)
             pass
         return obj
 
     def locateFile(self, path):
         if os.path.exists(path):
             return path
-        for searchDir in self.SearchPath:
+        for searchDir in SearchPath:
             newPath = searchDir + path
             if os.path.exists(newPath):
                 return newPath
@@ -76,7 +91,7 @@ class Cache:
 
     def loadFile(self, path):
         if utils.verbose:
-            print("loading {}...".format(path))
+            print("loading file \"{}\"...".format(path))
             pass
         root, ext = os.path.splitext(path)
         if ext not in ('.duf', '.dsf'):

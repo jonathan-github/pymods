@@ -4,7 +4,7 @@ import urllib.parse
 
 from . import types
 
-verbose = False
+verbose = 0
 
 class URL:
     def __init__(self, url):
@@ -32,13 +32,7 @@ class URL:
             pass
         pass
     def __repr__(self):
-        return "{}: scheme={} path={} fragment={} prop={}".format(
-            self.url,
-            self.scheme,
-            self.path,
-            self.fragment,
-            self.propPath
-        )
+        return self.url
     pass
 
 def toJSON(obj, **kwargs):
@@ -52,6 +46,15 @@ def toJSON(obj, **kwargs):
         obj = obj.srcData
         pass
     return json.dumps(obj, **kwargs)
+
+def outputJSON(fp, obj, **kwargs):
+    if 'sort_keys' not in kwargs:
+        kwargs['sort_keys'] = True
+        pass
+    if isinstance(obj, types.Object):
+        obj = obj.srcData
+        pass
+    return json.dump(obj, fp, **kwargs)
 
 def copyv(vec):
     return [x for x in vec]
