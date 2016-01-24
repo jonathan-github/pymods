@@ -3,3 +3,7 @@
 
 # exclude python cache directories
 __pycache__
+
+# exclude external content
+www/html/icons/basic-application
+
