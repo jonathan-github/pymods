@@ -6,13 +6,15 @@
  * surfaces larger than that must be split into multiple buffers.
  */
 utils.MeshBuffers = utils.extend(utils.Object, {
-    init: function(gl, surface) {
+    init: function(gl, surface, material) {
+	this.surface = surface;
+	this.material = material;
+	var indices = material.indices;
 	var vertices = surface.mesh.vertices;
 	var coords = surface.coords;
 	var normals = surface.normals;
-	var indices = surface.indices;
 	var mode = surface.mode;
-	var delta = (mode == gl.TRIANGLES ? 3 : 2);
+	var delta = (mode == gl.TRIANGLES ? 3 : /* gl.LINES */ 2);
 
 	utils.assert && utils.assert(
 	    coords.length == normals.length,
@@ -69,8 +71,14 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 	}
     },
 
+    update: function() {
+	for (var i = 0, n = this.buffers.length; i < n; ++i) {
+	    this.bufferUpdate(this.buffers[i]);
+	}
+    },
+
     draw: function(gl, program) {
-	for (i = 0, n = this.buffers.length; i < n; ++i) {
+	for (var i = 0, n = this.buffers.length; i < n; ++i) {
 	    this.bufferDraw(this.buffers[i], gl, program);
 	}
     },
@@ -117,23 +125,43 @@ utils.MeshBuffers = utils.extend(utils.Object, {
     },
 
     bufferCreate: function(buffer, gl, mode, idx) {
-	buffer.coords = utils.ArrayBuffer3f.create(
-	    gl, "surface.coords." + idx, buffer.coords
+	var id = this.material.id;
+	buffer.coordsBuf = utils.ArrayBuffer3f.create(
+	    gl, id + ".coords." + idx, buffer.coords
 	);
-	buffer.normals = utils.ArrayBuffer3f.create(
-	    gl, "surface.normals." + idx, buffer.normals
+	buffer.normalsBuf = utils.ArrayBuffer3f.create(
+	    gl, id + ".normals." + idx, buffer.normals
 	);
-	buffer.indices = utils.ElementBuffer2i.create(
-	    gl, "surface.indices." + idx, buffer.indices
+	buffer.indicesBuf = utils.ElementBuffer2i.create(
+	    gl, id + ".indices." + idx, buffer.indices
 	);
-	buffer.indices.mode = mode;
+	buffer.indicesBuf.mode = mode;
     },
 
     bufferDraw: function(buffer, gl, program) {
-	program.attributes.aCoord.set(buffer.coords);
-	program.attributes.aNormal.set(buffer.normals);
+	program.attributes.aCoord.set(buffer.coordsBuf);
+	program.attributes.aNormal.set(buffer.normalsBuf);
 	program.update(gl);
-	buffer.indices.draw(gl);
+	buffer.indicesBuf.draw(gl);
+    },
+
+    bufferUpdate: function(buffer) {
+	var indices = this.material.indices;
+	var coords = this.surface.coords;
+	var normals = this.surface.normals;
+	for (var i = 0, n = buffer.indices.length; i < n; ++i) {
+	    var bi = buffer.indices[i] * 3;
+	    var ci = indices[i + buffer.offset] * 3;
+	    buffer.coords[bi] = coords[ci];
+	    buffer.coords[bi + 1] = coords[ci + 1];
+	    buffer.coords[bi + 2] = coords[ci + 2];
+
+	    buffer.normals[bi] = normals[ci];
+	    buffer.normals[bi + 1] = normals[ci + 1];
+	    buffer.normals[bi + 2] = normals[ci + 2];
+	}
+	buffer.coordsBuf.set(buffer.coords);
+	buffer.normalsBuf.set(buffer.normals);
     }
 });
 
@@ -141,11 +169,10 @@ utils.MeshBuffers = utils.extend(utils.Object, {
  * Line surface model
  */
 utils.Surface = utils.extend(utils.Object, {
-    init: function(gl, mode, mesh, /*bones, weights,*/ color) {
+    init: function(gl, mode, mesh, color) {
 	this.mode = mode;
 	this.mesh = mesh;
 	this.bonesInit(mesh.figure);
-	//this.weightsInit(weights);
 	this.dirty = true;
 
 	var coords = [];
@@ -159,39 +186,28 @@ utils.Surface = utils.extend(utils.Object, {
 	}
 
 	var polygons = mesh.polygons;
-	var indices = [];
-	//var groups = mesh.polygon_groups;
 	var groups = mesh.material_groups;
 	for (i = 0, n = groups.length; i < n; ++i) {
-	    var polys = groups[i].polygons;
+	    var group = groups[i];
+	    var polys = group.polygons;
+	    var indices = [];
 	    for (var j = 0, m = polys.length; j < m; ++j) {
 		var poly = polygons[polys[j]];
 		this.initPoly(gl, mode, poly, indices);
 	    }
+	    group.indices = indices;
 	}
 
 	this.mvMatrix = mat4.create();
 	this.nMatrix = mat4.create();
 	this.color = color;
-
-	this.useBuffers = true;
-	if (this.useBuffers) {
-	    this.coords = coords;
-	    this.indices = indices;
-	} else {
-	    this.coords = utils.ArrayBuffer3f.create(
-		gl, "surface.coords"//, coords
-	    );
-	    this.normals = utils.ArrayBuffer3f.create(
-		gl, "surface.normals"
-	    );
-	    this.indices = utils.ElementBuffer2i.create(
-		gl, "surface.indices", indices
-	    );
-	    this.indices.mode = mode;
-	}
-
+	this.coords = coords;
+	this.normalsUpdate(coords);
 	this.bounds = utils.boundingBox(coords);
+	for (i = 0, n = groups.length; i < n; ++i) {
+	    var group = groups[i];
+	    group.buffers = utils.MeshBuffers.create(gl, this, group);
+	}
 	return this;
     },
 
@@ -297,16 +313,10 @@ utils.Surface = utils.extend(utils.Object, {
 	if (program.attributes.aColor && this.colors) {
 	    program.attributes.aColor.set(this.colors);
 	}
-	if (this.useBuffers) {
-	    if (!this.buffers) {
-		this.buffers = utils.MeshBuffers.create(gl, this);
-	    }
-	    this.buffers.draw(gl, program);
-	} else {
-	    program.attributes.aCoord.set(this.coords);
-	    program.attributes.aNormal.set(this.normals);
-	    program.update(gl);
-	    this.indices.draw(gl, program);
+	var groups = this.mesh.material_groups;
+	for (var i = 0, n = groups.length; i < n; ++i) {
+	    var group = groups[i];
+	    group.buffers.draw(gl, program);
 	}
     },
 
@@ -403,60 +413,21 @@ utils.Surface = utils.extend(utils.Object, {
 	}
 
 	if (bone.parent) {
+	    // only needed for vertexUpdateLBS
 	    mat4.multiply(m, bone.parent.m, m);
 	}
-
-	// verify that q == m
-	var mq = mat4.create();
-	dquat.toMat4(mq, q);
-	utils.test.mat4Eq(m, mq);
+	if (utils.test) {
+	    // verify that q == m
+	    var mq = mat4.create();
+	    dquat.toMat4(mq, q);
+	    utils.test.mat4Eq(m, mq);
+	}
 
 	var children = bone.children;
 	if (children) {
 	    for (var i = 0, n = children.length; i < n; ++i) {
 		var child = children[i];
 		this.boneUpdate(child);
-	    }
-	}
-    },
-
-    weightsInit: function(weights) {
-	/* remap the bone weights to vertex weights */
-	this.weights = weights;
-	this.vertexWeights = [];
-	for (var name in weights) {
-	    var boneWeights = weights[name];
-	    var bone = this.boneMap[name];
-	    utils.assert && utils.assert(
-		bone,
-		name + ": unknown weight map bone"
-	    );
-
-	    for (var i = 0, n = boneWeights.length; i < n; ++i) {
-		var rec = boneWeights[i];
-		var idx = rec[0];
-		var weight = rec[1];
-		var vrec = this.vertexWeights[idx];
-		if (vrec == undefined) {
-		    vrec = this.vertexWeights[idx] = [];
-		}
-		vrec.push([bone, weight]);
-	    }
-	}
-
-	/* normalize the vertex weights */
-	for (var i = 0, n = this.vertexWeights.length; i < n; ++i) {
-	    var vrec = this.vertexWeights[i];
-	    if (vrec != undefined) {
-		var sum = 0;
-		for (var j = 0, m = vrec.length; j < m; ++j) {
-		    sum += vrec[j][1];
-		}
-		if (m > 1 && Math.abs(sum - 1) > 1e-6) {
-		    for (j = 0, m = vrec.length; j < m; ++j) {
-			vrec[j][1] /= sum;
-		    }
-		}
 	    }
 	}
     },
@@ -479,10 +450,10 @@ utils.Surface = utils.extend(utils.Object, {
 	    coords.push(p[0], p[1], p[2]);
 	}
 	this.normalsUpdate(coords);
-	if (this.useBuffers) {
-	    this.coords = coords;
-	} else {
-	    this.coords.set(coords);
+	this.coords = coords;
+	var groups = this.mesh.material_groups;
+	for (i = 0, n = groups.length; i < n; ++i) {
+	    groups[i].buffers.update();
 	}
 	this.dirty = false;
     },
@@ -538,7 +509,6 @@ utils.Surface = utils.extend(utils.Object, {
 
     normalsUpdate: function(coords) {
 	var normals = [];
-	//var groups = this.mesh.polygon_groups;
 	var groups = this.mesh.material_groups;
 	var polygons = this.mesh.polygons;
 	for (var i = 0, n = groups.length; i < n; ++i) {
@@ -551,11 +521,7 @@ utils.Surface = utils.extend(utils.Object, {
 		}
 	    }
 	}
-	if (this.useBuffers) {
-	    this.normals = this.normalsAvg(normals);
-	} else {
-	    this.normals.set(this.normalsAvg(normals));
-	}
+	this.normals = this.normalsAvg(normals);
     },
 
     /**
@@ -610,7 +576,9 @@ utils.Surface = utils.extend(utils.Object, {
 	    vec3.normalize(sum, sum);
 	    avgs.push(sum[0], sum[1], sum[2]);
 	}
-	console.log("missing surface normals for " + missing + " vertices");
+	if (missing > 0) {
+	    console.log("missing surface normals for " + missing + " vertices");
+	}
 	return avgs;
     }
 });
