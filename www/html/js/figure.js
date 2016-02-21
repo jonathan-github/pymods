@@ -14,8 +14,8 @@ utils.Material = utils.extend(utils.Object, {
     },
 
     draw: function(gl, program) {
-	if (program.attributes.uColor && this.diffuseColor) {
-	    program.attributes.uColor.set(this.diffuseColor);
+	if (program.uniforms.uColor && this.diffuseColor) {
+	    program.uniforms.uColor.set(this.diffuseColor);
 	}
 	if (program.uniforms.uHasDiffuseTexture) {
 	    if (this.diffuseTexture) {
