@@ -88,6 +88,9 @@ def propFind(obj, targetId, useInstDef=True, defValue=None):
         if targetId == obj.get('name'):
             # name match
             return obj
+        if targetId == obj.get('type'):
+            # type match
+            return obj
         pval = obj.get(targetId)
         if pval is not None:
             # property match
