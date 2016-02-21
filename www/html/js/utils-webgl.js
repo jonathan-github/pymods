@@ -63,8 +63,8 @@ utils.App = {
 	}
     },
 
-    error: function() {
-	console.log("load failed: " + this.loader.reason);
+    error: function(loader) {
+	console.log("load failed: " + loader.reason);
     },
 
     ready: function() {
@@ -348,16 +348,13 @@ utils.ModelController = {
 
 	this.overlay = utils.Overlay.create();
 
-	utils.listeners(document/*this.app.canvas*/, {
+	utils.listeners(document, {
 	    mousedown: this.mouseDownEvent,
 	    mousemove: this.mouseMoveEvent,
 	    mouseup: this.mouseUpEvent,
 	    mouseover: this.mouseOverEvent,
 	    mouseout: this.mouseOutEvent,
 	    wheel: this.wheelEvent,
-	    scope: this
-	});
-	utils.listeners(document, {
 	    keypress: this.keyPressEvent,
 	    scope: this
 	});
@@ -512,7 +509,7 @@ utils.ModelController = {
     },
 
     degrees: function(rad) {
-	d = utils.degrees(rad) - 180;
+	var d = utils.degrees(rad) - 180;
 	if (d > 180) {
 	    d -= 360;
 	}
@@ -838,7 +835,7 @@ utils.Texture = utils.extend(utils.Object, {
 	case WebGLRenderingContext.TEXTURE_2D:
 		return "TEXTURE_2D";
 	case WebGLRenderingContext.TEXTURE_CUBE_MAP:
-		return "CUBE_MAX";
+		return "CUBE_MAP";
 	default:
 		return this.target.toString();
 	}
@@ -1201,12 +1198,10 @@ utils.AssetShader = utils.extend(utils.AssetLoader, {
 	var gl = config.gl;
 	this.batch({
 	    vertexShader: utils.AssetRequest.create({
-		url: this.config.vertexShaderURL,
-		shaderType: gl.VERTEX_SHADER
+		url: this.config.vertexShaderURL
 	    }),
 	    fragmentShader: utils.AssetRequest.create({
-		url: this.config.fragmentShaderURL,
-		shaderType: gl.VERTEX_SHADER
+		url: this.config.fragmentShaderURL
 	    })
 	});
 	return this;

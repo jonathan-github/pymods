@@ -1,41 +1,94 @@
 //utils.debug = 3;
 
+utils.Material = utils.extend(utils.Object, {
+    init: function(gl, app, model, material) {
+	var diffuse = material.diffuse;
+	if (diffuse) {
+	    this.diffuseColor = diffuse.color;
+	    var idx = diffuse.image;
+	    if (idx != undefined) {
+		this.diffuseTexture = app.textures[model.images[idx].id];
+		this.diffuseTexture.update(gl);
+	    }
+	}
+    },
+
+    draw: function(gl, program) {
+	if (program.attributes.uColor && this.diffuseColor) {
+	    program.attributes.uColor.set(this.diffuseColor);
+	}
+	if (program.uniforms.uHasDiffuseTexture) {
+	    if (this.diffuseTexture) {
+		this.diffuseTexture.bindTexture(gl);
+		program.uniforms.uHasDiffuseTexture.set(true);
+	    } else {
+		program.uniforms.uHasDiffuseTexture.set(false);
+	    }
+	}
+    }
+});
+
 /**
  * Split the surface mesh into one or more WebGL buffers.
  * Since a WebGL element buffer can only hold up to 0xFFFF indices,
  * surfaces larger than that must be split into multiple buffers.
  */
 utils.MeshBuffers = utils.extend(utils.Object, {
-    init: function(gl, surface, material) {
+    init: function(gl, surface, group_index) {
 	this.surface = surface;
-	this.material = material;
-	var indices = material.indices;
+	this.group_index = group_index;
+	var group = surface.mesh.material_groups[group_index];
+	var material = surface.mesh.materials[group.material];
+	var indices = group.indices;
 	var vertices = surface.mesh.vertices;
 	var coords = surface.coords;
 	var normals = surface.normals;
 	var mode = surface.mode;
 	var delta = (mode == gl.TRIANGLES ? 3 : /* gl.LINES */ 2);
 
+	var uv_indices = group.uv_indices;
+	var uvs = surface.mesh.uv_sets[material.uv_set].uvs;
+
 	utils.assert && utils.assert(
 	    coords.length == normals.length,
-	    "coords/normals length mismatch"
+	    group.id + " coords/normals length mismatch"
 	);
 	utils.assert && utils.assert(
 	    coords.length == 3 * vertices.length,
-	    "coords/vertices length mismatch"
+	    group.id + " coords/vertices length mismatch"
 	);
 	utils.assert && utils.assert(
 	    normals.length == 3 * vertices.length,
-	    "normals/vertices length mismatch"
+	    group.id + " normals/vertices length mismatch"
 	);
 	utils.assert && utils.assert(
 	    indices.length % delta == 0,
-	    "indices is not a multiple of " + delta
+	    group.id + " indices is not a multiple of " + delta
 	);
+
+	/*
+	 * A mesh vertex might have more than one texture coordinate, so construct the
+	 * array buffers around the texture coordinates and duplicate mesh vertices
+	 * as necessary.
+	 */
+
+	this.vertexMap = [];
+	for (var i = 0, n = indices.length; i < n; ++i) {
+	    var vi = indices[i];
+	    var uvi = uv_indices[i];
+	    utils.assert && utils.assert(
+		this.vertexMap[uvi] == undefined || this.vertexMap[uvi] == vi,
+		group.id + " uv coordinate maps to multiple vertices",
+		[group, "i =", i, ", uvi =", uvi,
+		 ", old =", this.vertexMap[uvi], ", p =", indices[this.vertexMap[uvi]],
+		 ", new =", vi, ", p =", indices[vi]]
+	    );
+	    this.vertexMap[uvi] = vi;
+	}
 
 	var buffer = this.bufferInit();
 	this.buffers = [buffer];
-	for (var i = 0, n = indices.length; i < n; ++i) {
+	for (i = 0, n = indices.length; i < n; ++i) {
 	    if ((i % delta) == 0 &&
 		buffer.count + delta > 0x10000) {
 		// start a new element buffer
@@ -43,12 +96,14 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 		buffer.offset = i;
 		this.buffers.push(buffer);
 	    }
+
 	    var vi = indices[i];
-	    var bi = buffer.vertexMap[vi];
+	    var uvi = uv_indices[i];
+	    var bi = buffer.vertexMap[uvi];
 	    if (bi == undefined) {
 		/* add vertex to buffer */
 		bi = buffer.count++;
-		buffer.vertexMap[vi] = bi;
+		buffer.vertexMap[uvi] = bi;
 		var idx = vi * 3;
 		buffer.coords.push(
 		    coords[idx],
@@ -60,12 +115,18 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 		    normals[idx + 1],
 		    normals[idx + 2]
 		);
+
+		/* add uv to buffer */
+		var uv = uvs[uvi];
+		buffer.uvs.push(uv[0], uv[1]);
 	    }
 	    buffer.indices.push(bi);
 	}
 	for (i = 0, n = this.buffers.length; i < n; ++i) {
 	    if (utils.debug) {
-		this.bufferValidate(this.buffers[i], indices, coords, normals);
+		this.bufferValidate(this.buffers[i], group,
+				    indices, coords, normals,
+				    uv_indices, uvs);
 	    }
 	    this.bufferCreate(this.buffers[i], gl, mode, i);
 	}
@@ -78,6 +139,10 @@ utils.MeshBuffers = utils.extend(utils.Object, {
     },
 
     draw: function(gl, program) {
+	var mesh = this.surface.mesh;
+	var group = mesh.material_groups[this.group_index];
+	var material = mesh.materials[group.material];
+	material.ctx.draw(gl, program);
 	for (var i = 0, n = this.buffers.length; i < n; ++i) {
 	    this.bufferDraw(this.buffers[i], gl, program);
 	}
@@ -90,23 +155,28 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 	    vertexMap: [],
 	    coords: [],
 	    normals: [],
-	    indices: []
+	    indices: [],
+	    uvs: []
 	};
     },
 
-    bufferValidate: function(buffer, indices, coords, normals) {
+    bufferValidate: function(buffer, group,
+			     indices, coords, normals,
+			     uv_indices, uvs) {
 	for (var i = 0, n = buffer.indices.length; i < n; ++i) {
 	    var bi = buffer.indices[i] * 3;
 	    var bc0 = buffer.coords[bi];
 	    var bc1 = buffer.coords[bi + 1];
 	    var bc2 = buffer.coords[bi + 2];
-	    var ci = indices[i + buffer.offset] * 3;
+	    var uvi = uv_indices[i + buffer.offset];
+	    var vi = this.vertexMap[uvi];
+	    var ci = vi * 3;
 	    var c0 = coords[ci];
 	    var c1 = coords[ci + 1];
 	    var c2 = coords[ci + 2];
 	    utils.assert && utils.assert(
 		bc0 == c0 && bc1 == c1 && bc2 == c2,
-		"buffer coord mismatch for index " + i,
+		group.id + " buffer coord mismatch for index " + i,
 		[bc0, bc1, bc2, c0, c1, c2]
 	    );
 
@@ -118,19 +188,37 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 	    var n2 = normals[ci + 2];
 	    utils.assert && utils.assert(
 		bn0 == n0 && bn1 == n1 && bn2 == n2,
-		"buffer normal mismatch for index " + i,
+		group.id + " buffer normal mismatch for index " + i,
 		[bn0, bn1, bn2, n0, n1, n2]
+	    );
+
+	    bi = buffer.indices[i] * 2;
+	    var bu = buffer.uvs[bi];
+	    var bv = buffer.uvs[bi + 1];
+	    var uv = uvs[uvi];
+	    var u = uv[0];
+	    var v = uv[1];
+	    utils.assert && utils.assert(
+		bu == u && bv == v,
+		group.id + " buffer uv mismatch for index " + i,
+		["uv validate", group.id, "i =", i, ", vi =", vi, ", bi =", bi/2,
+		 ", uvi =", uvi, ", uv =", uv,
+		 ", bu =", bu, ", bv =", bv]
 	    );
 	}
     },
 
     bufferCreate: function(buffer, gl, mode, idx) {
-	var id = this.material.id;
+	var group = this.surface.mesh.material_groups[this.group_index];
+	var id = group.id;
 	buffer.coordsBuf = utils.ArrayBuffer3f.create(
 	    gl, id + ".coords." + idx, buffer.coords
 	);
 	buffer.normalsBuf = utils.ArrayBuffer3f.create(
 	    gl, id + ".normals." + idx, buffer.normals
+	);
+	buffer.uvsBuf = utils.ArrayBuffer2f.create(
+	    gl, id + ".texCoords." + idx, buffer.uvs
 	);
 	buffer.indicesBuf = utils.ElementBuffer2i.create(
 	    gl, id + ".indices." + idx, buffer.indices
@@ -141,12 +229,16 @@ utils.MeshBuffers = utils.extend(utils.Object, {
     bufferDraw: function(buffer, gl, program) {
 	program.attributes.aCoord.set(buffer.coordsBuf);
 	program.attributes.aNormal.set(buffer.normalsBuf);
+	if (program.attributes.aTexCoord) {
+	    program.attributes.aTexCoord.set(buffer.uvsBuf);
+	}
 	program.update(gl);
 	buffer.indicesBuf.draw(gl);
     },
 
     bufferUpdate: function(buffer) {
-	var indices = this.material.indices;
+	var group = this.surface.mesh.material_groups[this.group_index];
+	var indices = group.indices;
 	var coords = this.surface.coords;
 	var normals = this.surface.normals;
 	for (var i = 0, n = buffer.indices.length; i < n; ++i) {
@@ -166,36 +258,72 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 });
 
 /**
+ * Unpack [[a, b], ...] into [a, b, ...].
+ */
+utils.arrayUnpack2f = function(vec) {
+    var n = vec.length;
+    var unpacked = new Float32Array(n * 2);
+    for (var i = 0, j = 0; i < n; ++i) {
+	var rec = vec[i];
+	unpacked[j++] = rec[0];
+	unpacked[j++] = rec[1];
+    }
+    return unpacked;
+};
+
+/**
+ * Unpack [[x, y, z], ...] into [x, y, z, ...].
+ */
+utils.arrayUnpack3f = function(vec) {
+    var n = vec.length;
+    var unpacked = new Float32Array(n * 3);
+    for (var i = 0, j = 0; i < n; ++i) {
+	var rec = vec[i];
+	unpacked[j++] = rec[0];
+	unpacked[j++] = rec[1];
+	unpacked[j++] = rec[2];
+    }
+    return unpacked;
+};
+
+/**
  * Line surface model
  */
 utils.Surface = utils.extend(utils.Object, {
-    init: function(gl, mode, mesh, color) {
+    init: function(gl, mode, app, mesh, color) {
 	this.mode = mode;
 	this.mesh = mesh;
 	this.bonesInit(mesh.figure);
 	this.dirty = true;
 
-	var coords = [];
-	var vertices = mesh.vertices;
-	for (var i = 0, n = vertices.length; i < n; ++i) {
-	    utils.assert && utils.assert(
-		vertices[i].length == 3,
-		"unsupported vertex size: " + vertices[i].length
-	    );
-	    utils.append(coords, vertices[i]);
+	var materials = mesh.materials;
+	for (var i = 0, n = materials.length; i < n; ++i) {
+	    var material = materials[i];
+	    material.ctx = utils.Material.create(gl, app, mesh, material);
 	}
+
+	var vertices = mesh.vertices;
+	var coords = utils.arrayUnpack3f(vertices);
 
 	var polygons = mesh.polygons;
 	var groups = mesh.material_groups;
-	for (i = 0, n = groups.length; i < n; ++i) {
+	for (var i = 0, n = groups.length; i < n; ++i) {
 	    var group = groups[i];
 	    var polys = group.polygons;
+	    var uvs = group.uvs;
+	    utils.assert && utils.assert(
+		polys.length == uvs.length,
+		"length mismatch: polygons=" + polys.length + " and uvs=" + uvs.length
+	    );
 	    var indices = [];
+	    var uv_indices = [];
 	    for (var j = 0, m = polys.length; j < m; ++j) {
 		var poly = polygons[polys[j]];
-		this.initPoly(gl, mode, poly, indices);
+		var uv_poly = uvs[j];
+		this.initPoly(gl, mode, poly, indices, uv_poly, uv_indices);
 	    }
 	    group.indices = indices;
+	    group.uv_indices = uv_indices;
 	}
 
 	this.mvMatrix = mat4.create();
@@ -206,7 +334,7 @@ utils.Surface = utils.extend(utils.Object, {
 	this.bounds = utils.boundingBox(coords);
 	for (i = 0, n = groups.length; i < n; ++i) {
 	    var group = groups[i];
-	    group.buffers = utils.MeshBuffers.create(gl, this, group);
+	    group.buffers = utils.MeshBuffers.create(gl, this, i);
 	}
 	return this;
     },
@@ -216,13 +344,17 @@ utils.Surface = utils.extend(utils.Object, {
 	return vec3.distance(vertices[a], vertices[b]);
     },
 
-    initPoly: function(gl, mode, poly, indices) {
+    initPoly: function(gl, mode, poly, indices, uv_poly, uv_indices) {
 	var l = poly.length;
 	var n = 0;
 
 	utils.assert && utils.assert(
 	    l == 3 || l == 4,
 	    "unsupported polygon size: " + l
+	);
+	utils.assert && utils.assert(
+	    l == uv_poly.length,
+	    "uv polygon size is " + uv_poly.length + ", but expected " + l
 	);
 	utils.assert && utils.assert(
 	    mode == gl.LINES || mode == gl.TRIANGLES,
@@ -238,12 +370,23 @@ utils.Surface = utils.extend(utils.Object, {
 		    poly[2], poly[3],
 		    poly[3], poly[0]
 		);
+		uv_indices.push(
+		    uv_poly[0], uv_poly[1],
+		    uv_poly[1], uv_poly[2],
+		    uv_poly[2], uv_poly[3],
+		    uv_poly[3], uv_poly[0]
+		);
 		n = 8;
 	    } else if (l == 3) {
 		indices.push(
 		    poly[0], poly[1],
 		    poly[1], poly[2],
 		    poly[2], poly[0]
+		);
+		uv_indices.push(
+		    uv_poly[0], uv_poly[1],
+		    uv_poly[1], uv_poly[2],
+		    uv_poly[2], uv_poly[0]
 		);
 		n = 6;
 	    }
@@ -262,15 +405,24 @@ utils.Surface = utils.extend(utils.Object, {
 			a, b, c,
 			c, d, a
 		    );
+		    uv_indices.push(
+			uv_poly[0], uv_poly[1], uv_poly[2],
+			uv_poly[2], uv_poly[3], uv_poly[0]
+		    );
 		} else {
 		    indices.push(
 			b, c, d,
 			d, a, b
 		    );
+		    uv_indices.push(
+			uv_poly[1], uv_poly[2], uv_poly[3],
+			uv_poly[3], uv_poly[0], uv_poly[1]
+		    );
 		}
 		n = 6;
 	    } else if (l == 3) {
 		utils.append(indices, poly);
+		utils.append(uv_indices, uv_poly);
 		n = 3;
 	    }
 	    break;
@@ -621,11 +773,14 @@ var App = utils.extend(utils.App, {
 		    uColor: utils.Uniform4f.create(),
 		    uLightColor: utils.Uniform3f.create(),
 		    uLightDirection: utils.Uniform3f.create(),
-		    uAmbientColor: utils.Uniform3f.create()
+		    uAmbientColor: utils.Uniform3f.create(),
+		    uHasDiffuseTexture: utils.Uniform1i.create(),
+		    uDiffuseTexture: utils.Uniform1i.create()
 		},
 		attributes: {
 		    aCoord: utils.AttributeBuffer.create(),
-		    aNormal: utils.AttributeBuffer.create()
+		    aNormal: utils.AttributeBuffer.create(),
+		    aTexCoord: utils.AttributeBuffer.create()
 		}
 	    }),
 	    hair: utils.AssetRequest.create({
@@ -635,10 +790,39 @@ var App = utils.extend(utils.App, {
 		url: "lib/models/figure.json"
 	    })
 	});
+	this.loadState = 'init';
 	this.loader.load();
     },
 
     ready: function() {
+	this.textureLoader = utils.AssetLoader.create({
+	    loadMask: this.loadMask,
+	    ready: this.texturesReady,
+	    error: this.error,
+	    scope: this
+	});
+	this.model = this.loader.cache.figure.responseJSON();
+	var images = this.model.images;
+	if (images) {
+	    var batch = {};
+	    for (var i = 0, n = images.length; i < n; ++i) {
+		var image = images[i];
+		var src = "lib/textures/" + image.image;
+		var idx = src.lastIndexOf('.tif');
+		if (idx > 0) {
+		    // try to load a .png version
+		    src = src.substring(0, idx) + '.png';
+		}
+		batch[image.id] = utils.AssetImage.create({
+		    src: src
+		});
+	    }
+	    this.textureLoader.batch(batch);
+	}
+	this.textureLoader.load();
+    },
+
+    texturesReady: function() {
 	var gl = this.gl;
 
 	this.shaderSkyBox = this.loader.cache.shaderSkyBox.program;
@@ -657,12 +841,29 @@ var App = utils.extend(utils.App, {
 	this.shaderSurface.uniforms.uLightColor.set([0.5, 0.5, 0.5]);
 	this.shaderSurface.uniforms.uLightDirection.set(uLightDirection);
 	this.shaderSurface.uniforms.uAmbientColor.set([0.4, 0.4, 0.4]);
+	this.shaderSurface.uniforms.uHasDiffuseTexture.set(false);
+	this.shaderSurface.uniforms.uDiffuseTexture.set(0);
+
+	this.textures = {};
+	for (var id in this.textureLoader.cache) {
+	    var image = this.textureLoader.cache[id];
+	    var texture = utils.Texture2D.extend(
+		{ wrap_s: gl.REPEAT,
+		  wrap_t: gl.REPEAT,
+		  flipY: true },
+		gl, id, image.image
+	    );
+	    //texture.update(gl);
+	    this.textures[id] = texture;
+	}
+	this.textureLoader.cleanup();
 
 	if (this.loader.cache.hair) {
 	this.hair = utils.Surface.create(
 	    gl,
 	    //gl.LINES,
 	    gl.TRIANGLES,
+	    this,
 	    this.loader.cache.hair.responseJSON(),
 	    [1, 1, 1, 1]
 	);
@@ -671,7 +872,8 @@ var App = utils.extend(utils.App, {
 	    gl,
 	    //gl.LINES,
 	    gl.TRIANGLES,
-	    this.loader.cache.figure.responseJSON(),
+	    this,
+	    this.model,
 	    [1, 1, 1, 1]
 	);
 

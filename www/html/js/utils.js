@@ -14,9 +14,6 @@ if (!window.utils) {
 /// set the debugging level
 utils.debug = 0;
 
-/// utils.assert guard check
-utils.check = true;
-
 /**
  * Throw an exception if the condition is not true.
  * @param {boolean} condition
@@ -874,7 +871,14 @@ utils.AssetImage = utils.extend(utils.Asset, {
     load: function() {
 	this.image = new Image();
 	this.image.onload = this.loadEvent.bind(this);
+	this.image.onerror = this.imageError.bind(this);
 	this.image.src = this.config.src;
+    },
+
+    imageError: function() {
+	this.image.onload = null;
+	this.image.onerror = null;
+	this.error("error loading image " + this.config.src);
     },
 
     loadEvent: function() {
@@ -882,6 +886,7 @@ utils.AssetImage = utils.extend(utils.Asset, {
 	    "loaded " + this.config.src
 	);
 	this.image.onload = null;
+	this.image.onerror = null;
 	this.ready();
     }
 });
@@ -921,8 +926,8 @@ utils.AppBase = {
 	});
     },
 
-    error: function() {
-	console.log("load failed: " + this.loader.reason);
+    error: function(loader) {
+	console.log("load failed: " + loader.reason);
     },
 
     ready: function() {
