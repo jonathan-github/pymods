@@ -89,7 +89,6 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 	this.group_index = group_index;
 	var group = surface.mesh.material_groups[group_index];
 	var material = surface.mesh.materials[group.material];
-	this.drawOrder = material.ctx.drawOrder;
 	var indices = group.indices;
 	var vertices = surface.mesh.vertices;
 	var coords = surface.coords;
@@ -393,11 +392,25 @@ utils.Surface = utils.extend(utils.Object, {
     },
 
     drawOrder: function(a, b) {
-	var d = a.drawOrder - b.drawOrder;
+	var g1 = a.group_index,
+	    g2 = b.group_index;
+	var s1 = a.surface.mesh,
+	    s2 = b.surface.mesh;
+	var m1 = s1.material_groups[g1].material,
+	    m2 = s2.material_groups[g2].material;
+
+	// order by material draw order
+	var d = s1.materials[m1].ctx.drawOrder - s2.materials[m2].ctx.drawOrder;
 	if (d != 0) {
 	    return d;
 	}
-	return a.group_index - b.group_index;
+	// then by material
+	d = m1 - m2;
+	if (d != 0) {
+	    return d;
+	}
+	// then by group
+	return g1 - g2;
     },
 
     distance: function(a, b) {
