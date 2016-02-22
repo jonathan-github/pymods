@@ -3,13 +3,13 @@ uniform mat4 vMatrix;
 uniform mat4 mMatrix;
 uniform mat4 nMatrix;
 
-uniform vec4 uColor;
+uniform vec3 uColor;
 
 attribute vec3 aCoord;
 attribute vec3 aNormal;
 attribute vec2 aTexCoord;
 
-varying vec4 vColor;
+varying vec3 vColor;
 varying vec4 vNormal;
 varying vec2 vTexCoord;
 

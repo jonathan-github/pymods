@@ -2,18 +2,54 @@
 
 utils.Material = utils.extend(utils.Object, {
     init: function(gl, app, model, material) {
+	this.drawOrder = 0;
+
 	var diffuse = material.diffuse;
 	if (diffuse) {
 	    this.diffuseColor = diffuse.color;
 	    var idx = diffuse.image;
 	    if (idx != undefined) {
-		this.diffuseTexture = app.textures[model.images[idx].id];
-		this.diffuseTexture.update(gl);
+		var id = model.images[idx].id;
+		var texture = app.textures[id];
+		if (!texture) {
+		    texture = utils.Texture2D.extend(
+			{ textureUnit: 0,
+			  wrap_s: gl.REPEAT,
+			  wrap_t: gl.REPEAT,
+			  flipY: true },
+			gl, id, app.images[id]
+		    );
+		    app.textures[id] = texture;
+		    texture.update(gl);
+		}
+		this.diffuseTexture = texture;
+	    }
+	}
+	var cutout = material.cutout;
+	if (cutout) {
+	    var idx = cutout.image;
+	    if (idx != undefined) {
+		var id = model.images[idx].id;
+		var texture = app.textures[id];
+		if (!texture) {
+		    texture = utils.Texture2D.extend(
+			{ textureUnit: 1,
+			  wrap_s: gl.REPEAT,
+			  wrap_t: gl.REPEAT,
+			  flipY: true },
+			gl, id, app.images[id]
+		    );
+		    app.textures[id] = texture;
+		    texture.update(gl);
+		}
+		this.cutoutTexture = texture;
+		++this.drawOrder;
 	    }
 	}
     },
 
     draw: function(gl, program) {
+	var blend = false;
 	if (program.uniforms.uColor && this.diffuseColor) {
 	    program.uniforms.uColor.set(this.diffuseColor);
 	}
@@ -24,6 +60,20 @@ utils.Material = utils.extend(utils.Object, {
 	    } else {
 		program.uniforms.uHasDiffuseTexture.set(false);
 	    }
+	}
+	if (program.uniforms.uHasCutoutTexture) {
+	    if (this.cutoutTexture) {
+		blend = true;
+		this.cutoutTexture.bindTexture(gl);
+		program.uniforms.uHasCutoutTexture.set(true);
+	    } else {
+		program.uniforms.uHasCutoutTexture.set(false);
+	    }
+	}
+	if (blend) {
+	    gl.enable(gl.BLEND);
+	    // pre-multiplied alpha
+	    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 	}
     }
 });
@@ -39,6 +89,7 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 	this.group_index = group_index;
 	var group = surface.mesh.material_groups[group_index];
 	var material = surface.mesh.materials[group.material];
+	this.drawOrder = material.ctx.drawOrder;
 	var indices = group.indices;
 	var vertices = surface.mesh.vertices;
 	var coords = surface.coords;
@@ -307,7 +358,7 @@ utils.Surface = utils.extend(utils.Object, {
 
 	var polygons = mesh.polygons;
 	var groups = mesh.material_groups;
-	for (var i = 0, n = groups.length; i < n; ++i) {
+	for (i = 0, n = groups.length; i < n; ++i) {
 	    var group = groups[i];
 	    var polys = group.polygons;
 	    var uvs = group.uvs;
@@ -332,11 +383,21 @@ utils.Surface = utils.extend(utils.Object, {
 	this.coords = coords;
 	this.normalsUpdate(coords);
 	this.bounds = utils.boundingBox(coords);
+	this.buffers = [];
 	for (i = 0, n = groups.length; i < n; ++i) {
 	    var group = groups[i];
-	    group.buffers = utils.MeshBuffers.create(gl, this, i);
+	    this.buffers.push(utils.MeshBuffers.create(gl, this, i));
 	}
+	this.buffers.sort(this.drawOrder);
 	return this;
+    },
+
+    drawOrder: function(a, b) {
+	var d = a.drawOrder - b.drawOrder;
+	if (d != 0) {
+	    return d;
+	}
+	return a.group_index - b.group_index;
     },
 
     distance: function(a, b) {
@@ -465,10 +526,9 @@ utils.Surface = utils.extend(utils.Object, {
 	if (program.attributes.aColor && this.colors) {
 	    program.attributes.aColor.set(this.colors);
 	}
-	var groups = this.mesh.material_groups;
-	for (var i = 0, n = groups.length; i < n; ++i) {
-	    var group = groups[i];
-	    group.buffers.draw(gl, program);
+	var buffers = this.buffers;
+	for (var i = 0, n = buffers.length; i < n; ++i) {
+	    buffers[i].draw(gl, program);
 	}
     },
 
@@ -603,9 +663,9 @@ utils.Surface = utils.extend(utils.Object, {
 	}
 	this.normalsUpdate(coords);
 	this.coords = coords;
-	var groups = this.mesh.material_groups;
-	for (i = 0, n = groups.length; i < n; ++i) {
-	    groups[i].buffers.update();
+	var buffers = this.buffers;
+	for (i = 0, n = buffers.length; i < n; ++i) {
+	    buffers[i].update();
 	}
 	this.dirty = false;
     },
@@ -770,12 +830,14 @@ var App = utils.extend(utils.App, {
 		    vMatrix: utils.UniformMat4.create(),
 		    pMatrix: utils.UniformMat4.create(),
 		    nMatrix: utils.UniformMat4.create(),
-		    uColor: utils.Uniform4f.create(),
+		    uColor: utils.Uniform3f.create(),
 		    uLightColor: utils.Uniform3f.create(),
 		    uLightDirection: utils.Uniform3f.create(),
 		    uAmbientColor: utils.Uniform3f.create(),
 		    uHasDiffuseTexture: utils.Uniform1i.create(),
-		    uDiffuseTexture: utils.Uniform1i.create()
+		    uDiffuseTexture: utils.Uniform1i.create(),
+		    uHasCutoutTexture: utils.Uniform1i.create(),
+		    uCutoutTexture: utils.Uniform1i.create()
 		},
 		attributes: {
 		    aCoord: utils.AttributeBuffer.create(),
@@ -843,19 +905,15 @@ var App = utils.extend(utils.App, {
 	this.shaderSurface.uniforms.uAmbientColor.set([0.4, 0.4, 0.4]);
 	this.shaderSurface.uniforms.uHasDiffuseTexture.set(false);
 	this.shaderSurface.uniforms.uDiffuseTexture.set(0);
+	this.shaderSurface.uniforms.uHasCutoutTexture.set(false);
+	this.shaderSurface.uniforms.uCutoutTexture.set(1);
 
-	this.textures = {};
+	this.images = {};
 	for (var id in this.textureLoader.cache) {
 	    var image = this.textureLoader.cache[id];
-	    var texture = utils.Texture2D.extend(
-		{ wrap_s: gl.REPEAT,
-		  wrap_t: gl.REPEAT,
-		  flipY: true },
-		gl, id, image.image
-	    );
-	    //texture.update(gl);
-	    this.textures[id] = texture;
+	    this.images[id] = image.image;
 	}
+	this.textures = {};
 	this.textureLoader.cleanup();
 
 	if (this.loader.cache.hair) {
@@ -955,8 +1013,9 @@ var App = utils.extend(utils.App, {
 	gl.enable(gl.DEPTH_TEST);
 
 	this.shaderSurface.useProgram(gl);
-	gl.enable(gl.CULL_FACE);
-	gl.cullFace(gl.BACK);
+	// TBD: make back face culling material dependent
+	//gl.enable(gl.CULL_FACE);
+	//gl.cullFace(gl.BACK);
 	this.figure.draw(gl, this.shaderSurface);
 	if (this.hair) {
 	    // some of the hair backfaces need to be displayed
