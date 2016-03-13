@@ -791,6 +791,21 @@ utils.ElementBuffer2ui = utils.extend(utils.ElementBuffer, {
     type: WebGLRenderingContext.UNSIGNED_INT
 });
 
+/**
+ * Determine if the size if a power of two.
+ * @param {Integer} size the size
+ * @returns {Boolean} true if the size is a power of two
+ */
+utils.isPOT = function(size) {
+    while (size > 0) {
+	if (size & 1) {
+	    return size == 1;
+	}
+	size >>= 1;
+    }
+    return false;
+};
+
 utils.Texture = utils.extend(utils.Object, {
     /// texture target
     target: WebGLRenderingContext.TEXTURE_2D,
@@ -870,6 +885,13 @@ utils.Texture = utils.extend(utils.Object, {
     },
 
     set: function(image) {
+	if (!utils.isPOT(image.width) || utils.isPOT(image.height)) {
+	    utils.assert && utils.assert(
+		(this.wrap_s == WebGLRenderingContext.CLAMP_TO_EDGE &&
+		 this.wrap_t == WebGLRenderingContext.CLAMP_TO_EDGE),
+		this.name + ": wrap_s and wrap_t must be CLAMP_TO_EDGE for NPOT textures"
+	    );
+	}
 	this.image = image;
 	this.dirty = true;
     },
