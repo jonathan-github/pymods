@@ -1,12 +1,29 @@
 //utils.debug = 3;
 
 utils.Material = utils.extend(utils.Object, {
+    materialDrawOrder: {
+	'Scalp-1': 1,
+	'Under-1': 2,
+	'Over-1': 3,
+	'BunShort-1': 4,
+	'BunLong-1': 5,
+	'SideBurn-1': 6
+    },
+
     init: function(gl, app, model, material) {
 	this.id = material.id;
 	this.drawOrder = 0;
-	this.disabled = material.id == 'EyeMoisture-1';
+	this.disabled = (
+	    material.id == 'EyeMoisture-1' ||
+	    false
+	);
 	if (this.disabled) {
 	    return;
+	}
+
+	var d = this.materialDrawOrder[material.id];
+	if (d != undefined) {
+	    this.drawOrder += d;
 	}
 
 	var diffuse = material.diffuse;
@@ -1064,8 +1081,6 @@ var App = utils.extend(utils.App, {
 	this.shaderSkyBox.useProgram(gl);
 	this.skyBox.draw(gl, this.shaderSkyBox);
 
-	gl.enable(gl.DEPTH_TEST);
-
 	this.shaderSurface.useProgram(gl);
 
 	// TBD: make back face culling material dependent
@@ -1077,10 +1092,14 @@ var App = utils.extend(utils.App, {
 	for (var i = 0, n = this.renderPasses.length; i < n; ++i) {
 	    var renderPass = this.renderPasses[i];
 	    if (renderPass.transparency) {
+		gl.depthMask(false);
 		gl.enable(gl.BLEND);
 		// pre-multiplied alpha
 		gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 	    } else {
+		gl.enable(gl.DEPTH_TEST);
+		gl.depthMask(true);
+		gl.depthFunc(gl.LESS);
 		gl.disable(gl.BLEND);
 	    }
 	    for (var j = 0; j < m; ++j) {
