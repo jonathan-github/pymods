@@ -2,7 +2,12 @@
 
 utils.Material = utils.extend(utils.Object, {
     init: function(gl, app, model, material) {
+	this.id = material.id;
 	this.drawOrder = 0;
+	this.disabled = material.id == 'EyeMoisture-1';
+	if (this.disabled) {
+	    return;
+	}
 
 	var diffuse = material.diffuse;
 	if (diffuse) {
@@ -11,18 +16,17 @@ utils.Material = utils.extend(utils.Object, {
 	    if (idx != undefined) {
 		var id = model.images[idx].id;
 		var texture = app.textures[id];
-		if (!texture) {
+		if (!texture && app.images[id]) {
 		    texture = utils.Texture2D.extend(
-			{ textureUnit: 0,
-			  wrap_s: gl.REPEAT,
-			  wrap_t: gl.REPEAT,
-			  flipY: true },
+			{ textureUnit: 0 },
 			gl, id, app.images[id]
 		    );
 		    app.textures[id] = texture;
 		    texture.update(gl);
 		}
-		this.diffuseTexture = texture;
+		if (texture) {
+		    this.diffuseTexture = texture;
+		}
 	    }
 	}
 	var cutout = material.cutout;
@@ -33,10 +37,7 @@ utils.Material = utils.extend(utils.Object, {
 		var texture = app.textures[id];
 		if (!texture) {
 		    texture = utils.Texture2D.extend(
-			{ textureUnit: 1,
-			  wrap_s: gl.REPEAT,
-			  wrap_t: gl.REPEAT,
-			  flipY: true },
+			{ textureUnit: 1 },
 			gl, id, app.images[id]
 		    );
 		    app.textures[id] = texture;
@@ -48,8 +49,12 @@ utils.Material = utils.extend(utils.Object, {
 	}
     },
 
-    draw: function(gl, program) {
-	var blend = false;
+    draw: function(gl, program, renderPass) {
+	var hasTransparency = this.cutoutTexture;
+	if (hasTransparency && !renderPass.transparency) {
+	    return false;
+	}
+
 	if (program.uniforms.uColor && this.diffuseColor) {
 	    program.uniforms.uColor.set(this.diffuseColor);
 	}
@@ -63,18 +68,13 @@ utils.Material = utils.extend(utils.Object, {
 	}
 	if (program.uniforms.uHasCutoutTexture) {
 	    if (this.cutoutTexture) {
-		blend = true;
 		this.cutoutTexture.bindTexture(gl);
 		program.uniforms.uHasCutoutTexture.set(true);
 	    } else {
 		program.uniforms.uHasCutoutTexture.set(false);
 	    }
 	}
-	if (blend) {
-	    gl.enable(gl.BLEND);
-	    // pre-multiplied alpha
-	    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-	}
+	return true;
     }
 });
 
@@ -167,7 +167,7 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 		);
 
 		/* add uv to buffer */
-		var uv = uvs[uvi];
+		var uv = this.unUDIM(uvs[uvi]);
 		buffer.uvs.push(uv[0], uv[1]);
 	    }
 	    buffer.indices.push(bi);
@@ -182,19 +182,36 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 	}
     },
 
+    unUDIM: function(uv) {
+	var u = uv[0];
+	var v = uv[1];
+	if (u >= 1.0 || v >= 1.0) {
+	    u -= Math.floor(u);
+	    v -= Math.floor(v);
+	    return [u, v];
+	} else {
+	    return uv;
+	}
+    },
+
     update: function() {
 	for (var i = 0, n = this.buffers.length; i < n; ++i) {
 	    this.bufferUpdate(this.buffers[i]);
 	}
     },
 
-    draw: function(gl, program) {
+    draw: function(gl, program, renderPass) {
 	var mesh = this.surface.mesh;
 	var group = mesh.material_groups[this.group_index];
 	var material = mesh.materials[group.material];
-	material.ctx.draw(gl, program);
+	if (material.ctx.disabled) {
+	    return;
+	}
+	if (!material.ctx.draw(gl, program, renderPass)) {
+	    return;
+	}
 	for (var i = 0, n = this.buffers.length; i < n; ++i) {
-	    this.bufferDraw(this.buffers[i], gl, program);
+	    this.bufferDraw(this.buffers[i], gl, program, renderPass);
 	}
     },
 
@@ -245,7 +262,7 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 	    bi = buffer.indices[i] * 2;
 	    var bu = buffer.uvs[bi];
 	    var bv = buffer.uvs[bi + 1];
-	    var uv = uvs[uvi];
+	    var uv = this.unUDIM(uvs[uvi]);
 	    var u = uv[0];
 	    var v = uv[1];
 	    utils.assert && utils.assert(
@@ -276,7 +293,7 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 	buffer.indicesBuf.mode = mode;
     },
 
-    bufferDraw: function(buffer, gl, program) {
+    bufferDraw: function(buffer, gl, program, renderPass) {
 	program.attributes.aCoord.set(buffer.coordsBuf);
 	program.attributes.aNormal.set(buffer.normalsBuf);
 	if (program.attributes.aTexCoord) {
@@ -509,8 +526,8 @@ utils.Surface = utils.extend(utils.Object, {
 	var nMatrix = this.nMatrix;
 
 	mat4.multiply(mvMatrix, program.uniforms.vMatrix.value, this.mMatrix);
-	mat4.invert(mvMatrix, mvMatrix);
-	mat4.transpose(nMatrix, mvMatrix);
+	mat4.invert(nMatrix, mvMatrix);
+	mat4.transpose(nMatrix, nMatrix);
 
 	program.uniforms.nMatrix.set(nMatrix);
     },
@@ -525,7 +542,7 @@ utils.Surface = utils.extend(utils.Object, {
 	}
     },
 
-    draw: function(gl, program) {
+    draw: function(gl, program, renderPass) {
 	this.meshUpdate();
 	if (program.uniforms.mMatrix && this.mMatrix) {
 	    program.uniforms.mMatrix.set(this.mMatrix);
@@ -541,7 +558,7 @@ utils.Surface = utils.extend(utils.Object, {
 	}
 	var buffers = this.buffers;
 	for (var i = 0, n = buffers.length; i < n; ++i) {
-	    buffers[i].draw(gl, program);
+	    buffers[i].draw(gl, program, renderPass);
 	}
     },
 
@@ -813,7 +830,7 @@ var App = utils.extend(utils.App, {
 	this.initCanvas();
 	var gl = this.gl;
 
-	this.loader.batch({
+	var assets = {
 	    shaderSkyBox: utils.AssetShader.create({
 		gl: gl,
 		name: "shaderSkyBox",
@@ -857,14 +874,19 @@ var App = utils.extend(utils.App, {
 		    aNormal: utils.AttributeBuffer.create(),
 		    aTexCoord: utils.AttributeBuffer.create()
 		}
-	    }),
-	    hair: utils.AssetRequest.create({
-		url: "lib/models/hair.json"
-	    }),
-	    figure: utils.AssetRequest.create({
-		url: "lib/models/figure.json"
 	    })
-	});
+	};
+	if (true) {
+	    assets.figure = utils.AssetRequest.create({
+		url: "lib/models/figure.json"
+	    });
+	}
+	if (true) {
+	    assets.hair = utils.AssetRequest.create({
+		url: "lib/models/hair.json"
+	    });
+	}
+	this.loader.batch(assets);
 	this.loadState = 'init';
 	this.loader.load();
     },
@@ -876,8 +898,19 @@ var App = utils.extend(utils.App, {
 	    error: this.error,
 	    scope: this
 	});
-	this.model = this.loader.cache.figure.responseJSON();
-	var images = this.model.images;
+	if (this.loader.cache.figure) {
+	    this.figure = this.loader.cache.figure.responseJSON();
+	    this.texturesLoad(this.figure);
+	}
+	if (this.loader.cache.hair) {
+	    this.hair = this.loader.cache.hair.responseJSON();
+	    this.texturesLoad(this.hair);
+	}
+	this.textureLoader.load();
+    },
+
+    texturesLoad: function(model) {
+	var images = model.images;
 	if (images) {
 	    var batch = {};
 	    for (var i = 0, n = images.length; i < n; ++i) {
@@ -894,7 +927,6 @@ var App = utils.extend(utils.App, {
 	    }
 	    this.textureLoader.batch(batch);
 	}
-	this.textureLoader.load();
     },
 
     texturesReady: function() {
@@ -914,6 +946,7 @@ var App = utils.extend(utils.App, {
 	vec3.normalize(uLightDirection, uLightDirection);
 	this.shaderSurface = this.loader.cache.shaderSurface.program;
 	this.shaderSurface.uniforms.uLightColor.set([0.5, 0.5, 0.5]);
+	//this.shaderSurface.uniforms.uLightColor.set([1.0, 1.0, 1.0]);
 	this.shaderSurface.uniforms.uLightDirection.set(uLightDirection);
 	this.shaderSurface.uniforms.uAmbientColor.set([0.4, 0.4, 0.4]);
 	this.shaderSurface.uniforms.uHasDiffuseTexture.set(false);
@@ -929,26 +962,31 @@ var App = utils.extend(utils.App, {
 	this.textures = {};
 	this.textureLoader.cleanup();
 
-	if (this.loader.cache.hair) {
-	this.hair = utils.Surface.create(
-	    gl,
-	    //gl.LINES,
-	    gl.TRIANGLES,
-	    this,
-	    this.loader.cache.hair.responseJSON(),
-	    [1, 1, 1, 1]
-	);
+	this.models = [];
+	if (this.hair) {
+	    this.hair = utils.Surface.create(
+		gl,
+		//gl.LINES,
+		gl.TRIANGLES,
+		this,
+		this.hair,
+		[1, 1, 1]
+	    );
+	    this.models.push(this.hair);
 	}
-	this.figure = utils.Surface.create(
-	    gl,
-	    //gl.LINES,
-	    gl.TRIANGLES,
-	    this,
-	    this.model,
-	    [1, 1, 1, 1]
-	);
+	if (this.figure) {
+	    this.figure = utils.Surface.create(
+		gl,
+		//gl.LINES,
+		gl.TRIANGLES,
+		this,
+		this.figure,
+		[1, 1, 1]
+	    );
+	    this.models.push(this.figure);
+	}
 
-	var bounds = this.figure.bounds;
+	var bounds = this.models[0].bounds;
 	console.log("bounds", bounds);
 	var size = Math.max(
 	    bounds.width,
@@ -961,15 +999,14 @@ var App = utils.extend(utils.App, {
 	    (bounds.zmax + bounds.zmin) / 2
 	];
 	var mMatrix = mat4.create();
-	mat4.translate(mMatrix, mMatrix, [0, -2.5, -5]);
-	//mat4.translate(mMatrix, mMatrix, [0, -3.75, -0.75]);
+	//mat4.translate(mMatrix, mMatrix, [0, -2.5, -5]);
+	mat4.translate(mMatrix, mMatrix, [0, -3.75, -0.75]);
 	var scale = 4 / bounds.ymax;
 	//var scale = 4/size;
 	mat4.scale(mMatrix, mMatrix, [scale, scale, scale]);
-	if (this.hair) {
-	    this.hair.mMatrix = mMatrix;
+	for (var i = 0, n = this.models.length; i < n; ++i) {
+	    this.models[i].mMatrix = mMatrix;
 	}
-	this.figure.mMatrix = mMatrix;
 
 	var ang = utils.radians(60);
 	var ry = mat4.create();
@@ -978,13 +1015,13 @@ var App = utils.extend(utils.App, {
 	mat4.rotateX(rx, rx, -ang);
 	var nrx = mat4.create();
 	mat4.rotateX(nrx, nrx, ang);
-	if (true) {
-	this.figure.boneSet('lForearmBend', ry);
-	this.figure.boneSet('lThighBend', rx);
-	this.figure.boneSet('lShin', nrx);
-	// TBD: move hair to match head
-	//this.figure.boneSet('head', ry);
-	//this.figure.boneSet('abdomenLower', nrx);
+	if (this.figure) {
+	    this.figure.boneSet('lForearmBend', ry);
+	    this.figure.boneSet('lThighBend', rx);
+	    this.figure.boneSet('lShin', nrx);
+	    // TBD: move hair to match head
+	    //this.figure.boneSet('head', ry);
+	    //this.figure.boneSet('abdomenLower', nrx);
 	}
 
 	//gl.clearColor(0, 0, 0, 1);
@@ -1009,11 +1046,15 @@ var App = utils.extend(utils.App, {
 	this.shaderSurface.uniforms.vMatrix.set(vMatrix);
     },
     mMatrixUpdate: function(mMatrix) {
-	if (this.hair) {
-	    this.hair.mMatrixUpdate(mMatrix);
+	for (var i = 0, n = this.models.length; i < n; ++i) {
+	    this.models[i].mMatrixUpdate(mMatrix);
 	}
-	this.figure.mMatrixUpdate(mMatrix);
     },
+
+    renderPasses: [
+	{ name: "opaque", transparency: false },
+	{ name: "transparency", transparency: true }
+    ],
 
     render: function() {
 	var gl = this.gl;
@@ -1026,14 +1067,25 @@ var App = utils.extend(utils.App, {
 	gl.enable(gl.DEPTH_TEST);
 
 	this.shaderSurface.useProgram(gl);
+
 	// TBD: make back face culling material dependent
 	//gl.enable(gl.CULL_FACE);
-	//gl.cullFace(gl.BACK);
-	this.figure.draw(gl, this.shaderSurface);
-	if (this.hair) {
-	    // some of the hair backfaces need to be displayed
-	    gl.disable(gl.CULL_FACE);
-	    this.hair.draw(gl, this.shaderSurface);
+	// some of the hair backfaces need to be displayed
+	gl.disable(gl.CULL_FACE);
+
+	var m = this.models.length;
+	for (var i = 0, n = this.renderPasses.length; i < n; ++i) {
+	    var renderPass = this.renderPasses[i];
+	    if (renderPass.transparency) {
+		gl.enable(gl.BLEND);
+		// pre-multiplied alpha
+		gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+	    } else {
+		gl.disable(gl.BLEND);
+	    }
+	    for (var j = 0; j < m; ++j) {
+		this.models[j].draw(gl, this.shaderSurface, renderPass);
+	    }
 	}
 
 	utils.debug = 0;
