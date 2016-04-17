@@ -881,6 +881,7 @@ var App = utils.extend(utils.App, {
 		    uLightColor: utils.Uniform3f.create(),
 		    uLightDirection: utils.Uniform3f.create(),
 		    uAmbientColor: utils.Uniform3f.create(),
+		    uSpecularColor: utils.Uniform3f.create(),
 		    uHasDiffuseTexture: utils.Uniform1i.create(),
 		    uDiffuseTexture: utils.Uniform1i.create(),
 		    uHasCutoutTexture: utils.Uniform1i.create(),
@@ -966,6 +967,7 @@ var App = utils.extend(utils.App, {
 	//this.shaderSurface.uniforms.uLightColor.set([1.0, 1.0, 1.0]);
 	this.shaderSurface.uniforms.uLightDirection.set(uLightDirection);
 	this.shaderSurface.uniforms.uAmbientColor.set([0.4, 0.4, 0.4]);
+	this.shaderSurface.uniforms.uSpecularColor.set([0.35, 0.45, 0.5]);
 	this.shaderSurface.uniforms.uHasDiffuseTexture.set(false);
 	this.shaderSurface.uniforms.uDiffuseTexture.set(0);
 	this.shaderSurface.uniforms.uHasCutoutTexture.set(false);
