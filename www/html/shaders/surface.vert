@@ -9,12 +9,14 @@ attribute vec3 aCoord;
 attribute vec3 aNormal;
 attribute vec2 aTexCoord;
 
+varying vec4 vPosition;
 varying vec3 vColor;
 varying vec4 vNormal;
 varying vec2 vTexCoord;
 
 void main() {
-	gl_Position = pMatrix * vMatrix * mMatrix * vec4(aCoord, 1.0);
+	vPosition = vMatrix * mMatrix * vec4(aCoord, 1.0);
+	gl_Position = pMatrix * vPosition;
 	vColor = uColor;
 	vNormal = nMatrix * vec4(aNormal, 1.0);
 	vTexCoord = aTexCoord;
