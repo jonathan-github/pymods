@@ -96,6 +96,179 @@ utils.Material = utils.extend(utils.Object, {
 });
 
 /**
+ * http://www.terathon.com/code/tangent.html
+ * http://www.opengl-tutorial.org/intermediate-tutorials/tutorial-13-normal-mapping/
+ */
+utils.ComputeTangents = {
+    compute: function(indices, coords, normals, uvs) {
+	var n = indices.length;
+	var m = coords.length;
+	utils.assert && utils.assert(
+	    (m % 3) == 0,
+	    "coordinate buffer length must be a multiple of three"
+	);
+	utils.assert && utils.assert(
+	    normals.length == m,
+	    "invalid normal buffer length"
+	);
+	var l = m / 3;
+	utils.assert && utils.assert(
+	    uvs.length == l * 2,
+	    "invalid uv buffer length"
+	);
+	this.coords = coords;
+	this.normals = normals;
+	this.uvs = uvs;
+	this.tangents = Array(m + l).fill(0.0);
+	this.bitangents = Array(m).fill(0.0);
+	for (var i = 0; i < n; i += 3) {
+	    this.process(indices[i], indices[i + 1], indices[i + 2]);
+	}
+	for (i = 0; i < l; ++i) {
+	    this.normalize(i);
+	}
+	return this.tangents;
+    },
+
+    clear: function() {
+	this.coords = null;
+	this.normals = null;
+	this.uvs = null;
+	this.tangents = null;
+	this.bitangents = null;
+    },
+
+    process: function(i0, i1, i2) {
+	var coords = this.coords;
+	var uvs = this.uvs;
+	var bi;
+
+	// p0
+	bi = i0 * 3;
+	var x0 = coords[bi];
+	var y0 = coords[bi + 1];
+	var z0 = coords[bi + 2];
+	// uv0
+	bi = i0 * 2;
+	var u0 = uvs[bi];
+	var v0 = uvs[bi + 1];
+
+	// p1
+	bi = i1 * 3;
+	var x1 = coords[bi];
+	var y1 = coords[bi + 1];
+	var z1 = coords[bi + 2];
+	// uv1
+	bi = i1 * 2;
+	var u1 = uvs[bi];
+	var v1 = uvs[bi + 1];
+
+	// p2
+	bi = i2 * 3;
+	var x2 = coords[bi];
+	var y2 = coords[bi + 1];
+	var z2 = coords[bi + 2];
+	// uv2
+	bi = i2 * 2;
+	var u2 = uvs[bi];
+	var v2 = uvs[bi + 1];
+
+	// d1
+	var dx1 = x1 - x0;
+	var dy1 = y1 - y0;
+	var dz1 = z1 - z0;
+	// d2
+	var dx2 = x2 - x0;
+	var dy2 = y2 - y0;
+	var dz2 = z2 - z0;
+
+	// duv1
+	var du1 = u1 - u0;
+	var dv1 = v1 - v0;
+	// duv2
+	var du2 = u2 - u0;
+	var dv2 = v2 - v0;
+
+	var r = 1.0 / (du1 * dv2 - dv1 * du2);
+	var tangent = [
+	    (dx1 * dv2 - dx2 * dv1) * r,
+	    (dy1 * dv2 - dy2 * dv1) * r,
+	    (dz1 * dv2 - dz2 * dv1) * r
+	];
+	var bitangent = [
+	    (dx2 * du1 - dx1 * du2) * r,
+	    (dy2 * du1 - dy1 * du2) * r,
+	    (dz2 * du1 - dz1 * du2) * r
+	];
+
+	this.add(i0, tangent, bitangent);
+	this.add(i1, tangent, bitangent);
+	this.add(i2, tangent, bitangent);
+    },
+
+    add: function(i, tangent, bitangent) {
+	var tangents = this.tangents;
+	var bitangents = this.bitangents;
+	var bi = i * 4;
+	tangents[bi] += tangent[0];
+	tangents[bi + 1] += tangent[1];
+	tangents[bi + 2] += tangent[2];
+	bi = i * 3;
+	bitangents[bi] += bitangent[0];
+	bitangents[bi + 1] += bitangent[1];
+	bitangents[bi + 2] += bitangent[2];
+    },
+
+    normalize: function(i) {
+	var normals = this.normals;
+	var tangents = this.tangents;
+	var bitangents = this.bitangents;
+
+	// n
+	var bi = i * 3;
+	var nx = normals[bi];
+	var ny = normals[bi + 1];
+	var nz = normals[bi + 2];
+	// b
+	var bx = bitangents[bi];
+	var by = bitangents[bi + 1];
+	var bz = bitangents[bi + 2];
+	// t
+	bi = i * 4;
+	var tx = tangents[bi];
+	var ty = tangents[bi + 1];
+	var tz = tangents[bi + 2];
+
+	// Gram-Schmidt orthogonalize
+
+	var t2 = (tx * tx + ty * ty + tz * tz);
+
+	// t' = t - n * dot(n, t)
+	var dot = nx * tx + ny * ty + nz * tz;
+	tx -= nx * dot;
+	ty -= ny * dot;
+	tz -= nz * dot;
+
+	// t' = normalize(t')
+	var mag = Math.sqrt(tx * tx + ty * ty + tz * tz);
+	tx /= mag;
+	ty /= mag;
+	tz /= mag;
+	tangents[bi] = tx;
+	tangents[bi + 1] = ty;
+	tangents[bi + 2] = tz;
+
+	// Calculate handedness
+	// m = (dot(cross(n, t), b) < 0) ? -1 : 1
+	var cx = ny * tz - nz * ty;
+	var cy = nz * tx - nx * tz;
+	var cz = nx * ty - ny * tx;
+	dot = cx * bx + cy * by + cz * bz;
+	tangents[bi + 3] = dot < 0.0 ? -1.0 : 1.0;
+    }
+};
+
+/**
  * Split the surface mesh into one or more WebGL buffers.
  * Since a WebGL element buffer can only hold up to 0xFFFF indices,
  * surfaces larger than that must be split into multiple buffers.
@@ -308,6 +481,19 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 	    gl, id + ".indices." + idx, buffer.indices
 	);
 	buffer.indicesBuf.mode = mode;
+
+	if (false) {
+	var tangents = utils.ComputeTangents.compute(
+		buffer.indices,
+		buffer.coords,
+		buffer.normals,
+		buffer.uvs
+	);
+	utils.ComputeTangents.clear();
+	buffer.tangents = utils.ArrayBuffer4f.create(
+	    gl, id + ".tangents." + idx, tangents
+	);
+	}
     },
 
     bufferDraw: function(buffer, gl, program, renderPass) {
