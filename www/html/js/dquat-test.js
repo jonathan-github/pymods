@@ -1,6 +1,6 @@
 
 utils.test = {
-    epsilon: 1e-5,
+    epsilon: 1e-3,
 
     error: function(msg) {
 	throw new Error(msg);
@@ -23,7 +23,8 @@ utils.test = {
 	    if (!utils.test.numberCheck(a[i], b[i])) {
 		utils.test.error(
 		    "matrices are not equal:\n" +
-		    mat3.str(a) + " and\n" + mat3.str(b)
+		    mat3.str(a) + " and\n" + mat3.str(b) +
+		    "\na[" + i + "]=" + a[i] + " b[" + i + "]=" + b[i]
 		);
 	    }
 	}
@@ -34,7 +35,8 @@ utils.test = {
 	    if (!utils.test.numberCheck(a[i], b[i])) {
 		utils.test.error(
 		    "matrices are not equal:\n" +
-		    mat4.str(a) + " and\n" + mat4.str(b)
+		    mat4.str(a) + " and\n" + mat4.str(b) +
+		    "\na[" + i + "]=" + a[i] + " b[" + i + "]=" + b[i]
 		);
 	    }
 	}
