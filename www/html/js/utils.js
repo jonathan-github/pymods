@@ -7,8 +7,8 @@
  * @namespace
  */
 var utils;
-if (!window.utils) {
-    window.utils = {};
+if (!self.utils) {
+    self.utils = {};
 }
 
 /// set the debugging level
@@ -32,7 +32,33 @@ utils.assertThrow = function(condition, message, log) {
 utils.assert = utils.assertThrow;
 
 /**
- * Create an object for a given prototye object.
+ * Merge the properties into the object.
+ * @param {object} object the object
+ * @param {object} props the properties to merge
+ * @return the object
+ */
+utils.merge = function(obj, props) {
+    var names = Object.getOwnPropertyNames(props);
+    for (var i = 0, n = names.length; i < n; ++i) {
+        var name = names[i];
+        obj[name] = props[name];
+    }
+    return obj;
+};
+
+/// @return true if the object is an instance of the prototype
+utils.isA = function(obj, proto) {
+    while (obj && typeof obj == 'object') {
+	if (obj === proto) {
+	    return true;
+	}
+	obj = obj.__proto__;
+    }
+    return false;
+};
+
+/**
+ * Create an object for a given prototype object.
  * @param {Object} proto the prototype object
  * @returns {Object} the newly created object
  */
@@ -87,6 +113,118 @@ utils.Object = {
     init: function() {
 	return this;
     }
+};
+
+/// multiplier to convert from degrees to radians
+utils.DEG_TO_RAD = Math.PI / 180;
+/// multiplier to convert from radians to degrees
+utils.RAD_TO_DEG = 180 / Math.PI;
+
+/**
+ * Convert from degrees to radians.
+ * @param {Number} d degrees
+ * @returns {Number} radians
+ */
+utils.radians = function(d) { return d * utils.DEG_TO_RAD; };
+
+/**
+ * Convert from radians to degrees.
+ * @param {Number} r radians
+ * @returns {Number} degrees
+ */
+utils.degrees = function(r) { return r * utils.RAD_TO_DEG; };
+
+/**
+ * Remove the element from the array.
+ * @returns (boolean} true if found, false if not
+ */
+utils.arrayRemove = function(ary, el) {
+    for (var i = 0, n = ary.length; i < n; ++i) {
+	if (ary[i] === el) {
+	    ary.splice(i, 1);
+	    return true;
+	}
+    }
+    return false;
+};
+
+/**
+ * Unpack [[u, v], ...] into [u, v, ...].
+ */
+utils.arrayUnpack2f = function(vec) {
+    var n = vec.length;
+    var unpacked = new Float32Array(n * 2);
+    for (var i = 0, j = 0; i < n; ++i) {
+	var rec = vec[i];
+	unpacked[j++] = rec[0];
+	unpacked[j++] = rec[1];
+    }
+    return unpacked;
+};
+
+/**
+ * Unpack [[x, y, z], ...] into [x, y, z, ...].
+ */
+utils.arrayUnpack3f = function(vec) {
+    var n = vec.length;
+    var unpacked = new Float32Array(n * 3);
+    for (var i = 0, j = 0; i < n; ++i) {
+	var rec = vec[i];
+	unpacked[j++] = rec[0];
+	unpacked[j++] = rec[1];
+	unpacked[j++] = rec[2];
+    }
+    return unpacked;
+};
+
+/**
+ * Compute the bounding box for the specified array of coordinates.
+ * @param {Array} coords the flattend out coordinates
+ * @returns {Object} the bounding box
+ */
+utils.boundingBox = function(coords) {
+    var xmin = coords[0];
+    var xmax = coords[0];
+    var ymin = coords[1];
+    var ymax = coords[1];
+    var zmin = coords[2];
+    var zmax = coords[2];
+
+    var i = 3, n = coords.length;
+    while (i < n) {
+	var x = coords[i++];
+	var y = coords[i++];
+	var z = coords[i++];
+	if (xmin > x) {
+	    xmin = x;
+	}
+	if (xmax < x) {
+	    xmax = x;
+	}
+	if (ymin > y) {
+	    ymin = y;
+	}
+	if (ymax < y) {
+	    ymax = y;
+	}
+	if (zmin > z) {
+	    zmin = z;
+	}
+	if (zmax < z) {
+	    zmax = z;
+	}
+    }
+    return {
+	xmin: xmin,
+	xmax: xmax,
+	ymin: ymin,
+	ymax: ymax,
+	zmin: zmin,
+	zmax: zmax,
+	width: (xmax - xmin),
+	height: (ymax - ymin),
+	depth: (zmax - zmin)
+    };
 };
 
 /**
@@ -207,6 +345,66 @@ utils.contentText = function(el, text) {
 utils.contentHTML = function(el, html) {
     el.innerHTML = html;
 };
+
+/**
+ * Prototype for building an Exponential Moving Average.
+ */
+utils.EMA = utils.extend(utils.Object, {
+    /**
+     * Initialize the object.
+     * @param {float} alpha the smoothing factor
+     */
+    init: function(alpha) {
+	if (alpha == undefined) {
+	    alpha = this.alphaN(10);
+	}
+	this.alpha = alpha;
+	this.n = 0;
+	this.ema = 0;
+	this.min = 0;
+	this.max = 0;
+    },
+
+    /**
+     * The alpha for approximating an N sample moving average.
+     */
+    alphaN: function(n) {
+	return 2 / (n + 1);
+    },
+
+    /**
+     * Reset the EMA.
+     */
+    reset: function() {
+	this.n = 0;
+	this.ema = 0;
+	this.min = 0;
+	this.max = 0;
+    },
+
+    /**
+     * Update the EMA.
+     */
+    update: function(value) {
+	var alpha = this.alpha;
+	var ema = this.ema;
+	var n = this.n;
+	if (n == 0) {
+	    this.min = this.max = value;
+	    ema = value;
+	} else {
+	    if (this.min > value) {
+		this.min = value;
+	    }
+	    if (this.max < value) {
+		this.max = value;
+	    }
+	    ema = value * alpha + ema * (1 - alpha);
+	}
+	this.ema = ema;
+	this.n = n + 1;
+    }
+});
 
 /**
  * Prototype for building HTML tables.
@@ -339,7 +537,8 @@ utils.Overlay = utils.extend(utils.Object, {
 	top: '10px',
 	left: '10px',
 	background: 'white',
-	opacity: 0.75
+	opacity: 0.75,
+        visibility: 'hidden'
     },
 
     /**
@@ -359,15 +558,21 @@ utils.Overlay = utils.extend(utils.Object, {
 	    config = {};
 	}
 	utils.styleSet(this.div, config.style || this.DEFAULT_STYLE);
-	this.tb = utils.TableBuilder.create();
-	this.div.appendChild(this.tb.table);
-	this.hide();
+        this.contentInit();
 	var parent = config.parent;
 	if (!parent) {
 	    parent = document.body;
 	}
 	parent.appendChild(this.div);
 	return this;
+    },
+
+    /**
+     * Initialize the content for the overlay.
+     */
+    contentInit: function() {
+	this.tb = utils.TableBuilder.create();
+	this.div.appendChild(this.tb.table);
     },
 
     /**
@@ -398,13 +603,28 @@ utils.Overlay = utils.extend(utils.Object, {
 	    if (this.tb.rows.length <= rows) {
 		this.tb.rowAdd();
 		th = this.tb.cellAdd('th');
+		th.align = 'left';
 		td = this.tb.cellAdd('td');
 	    } else {
 		th = this.tb.cellGet(rows, 0);
 		td = this.tb.cellGet(rows, 1);
 	    }
 	    utils.contentText(th, prop + ":");
-	    utils.contentHTML(td, val != undefined ? val : "");
+	    if (val != undefined) {
+		switch (typeof val) {
+		case 'number':
+		    val = val.toFixed(1);
+		    break;
+		case 'string':
+		    break;
+		default:
+		    val = val.toString();
+		    break;
+		}
+	    } else {
+		val = "";
+	    }
+	    utils.contentHTML(td, val);
 	    ++rows;
 	}
 	this.tb.rowsShrink(rows);
@@ -492,6 +712,26 @@ utils.Interval = utils.extend(utils.Object, {
     }
 });
 
+/// Listener ID counter
+utils.ListenerId = 0;
+
+/// Map of registered listeners.
+utils.ListenerMap = {};
+
+/**
+ * Remove all registered listeners.
+ */
+utils.removeListeners = function() {
+    var listeners = [];
+    for (var id in utils.ListenerMap) {
+	var listener = utils.ListenerMap[id];
+	listeners.push(listener);
+    }
+    for (var i = 0, n = listeners.length; i < n; ++i) {
+	listeners[i].remove();
+    }
+};
+
 /**
  * Prototype event listener remover.
  * @mixin
@@ -505,9 +745,11 @@ utils.RemoveListener = utils.extend(utils.Object, {
      * @returns {utils.RemoveListener} the object
      */
     init: function(obj, event, func) {
+	this.id = ++utils.ListenerId;
 	this.obj = obj;
 	this.event = event;
 	this.func = func;
+	utils.ListenerMap[this.id] = this;
 	return this;
     },
 
@@ -515,6 +757,7 @@ utils.RemoveListener = utils.extend(utils.Object, {
      * Remove the event listener.
      */
     remove: function() {
+	delete utils.ListenerMap[this.id];
 	if (this.obj) {
 	    this.obj.removeEventListener(this.event, this.func);
 	    this.obj = null;
@@ -630,12 +873,50 @@ utils.LoadMask = utils.extend(utils.Object, {
 });
 
 /**
+ * Compute the surface normal for an indexed polygon.
+ * https://www.opengl.org/wiki/Calculating_a_Surface_Normal
+ * @param {vec3} normal the output vec3 for the normal
+ * @param {Number[]} coords the flattened vertices array
+ * @param {Integer[]} poly the vertex indices for the polygon
+ * @returns {vec3} the surface normal
+ */
+utils.surfaceNormal = function(normal, coords, poly, normalize) {
+    var n = poly.length;
+    var x = 0, y = 0, z = 0;
+    for (var i = 0; i < n; ++i) {
+        var ci = poly[i] * 3;
+        var ni = poly[(i + 1) % n] * 3;
+
+        var cx = coords[ci];
+        var cy = coords[ci + 1];
+        var cz = coords[ci + 2];
+
+        var nx = coords[ni];
+        var ny = coords[ni + 1];
+        var nz = coords[ni + 2];
+
+        x += (cy - ny) * (cz + nz);
+        y += (cz - nz) * (cx + nx);
+        z += (cx - nx) * (cy + ny);
+    }
+    vec3.set(normal, x,y,z);
+    if (normalize) {
+        vec3.normalize(normal, normal);
+    }
+    return normal;
+};
+
+/**
  * Prototype asset loader.
  * @mixin
  */
 utils.Asset = utils.extend(utils.Object, {
+    STATE_PENDING: 'pending',
+    STATE_READY: 'ready',
+    STATE_ERROR: 'error',
+
     init: function(config) {
-	this.state = 'pending';
+	this.state = this.STATE_PENDING;
 	this.config = config || {};
 	return this;
     },
@@ -649,13 +930,13 @@ utils.Asset = utils.extend(utils.Object, {
     },
 
     error: function(reason) {
-	this.state = 'error';
+	this.state = this.STATE_ERROR;
 	this.reason = reason;
 	this.notify();
     },
 
     ready: function() {
-	this.state = 'ready';
+	this.state = this.STATE_READY;
 	this.notify();
     },
 
@@ -682,7 +963,10 @@ utils.AssetLoader = utils.extend(utils.Asset, {
     init: function(config) {
 	utils.Asset.init.call(this, config);
 	this.assets = [];
+	this.pending = [];
+	this.errors = [];
 	this.cache = {};
+	this.library = {};
 	return this;
     },
 
@@ -692,12 +976,19 @@ utils.AssetLoader = utils.extend(utils.Asset, {
 	    this.assets[i].cleanup();
 	}
 	this.assets.length = 0;
+	this.pending.length = 0;
 	this.cache = {};
     },
 
     add: function(asset) {
 	asset.loader = this;
 	this.assets.push(asset);
+    },
+
+    append: function(asset) {
+	this.add(asset);
+	this.pending.push(asset);
+	asset.load();
     },
 
     batch: function(batch) {
@@ -719,33 +1010,33 @@ utils.AssetLoader = utils.extend(utils.Asset, {
 	    this.config.loadMask.show();
 	}
 	for (var i = 0; i < n; ++i) {
-	    this.assets[i].load();
+	    var asset = this.assets[i];
+	    this.pending.push(asset);
+	    asset.load();
 	}
     },
 
     update: function(asset) {
-	var pending = false;
-	var error;
-	for (var i = 0, n = this.assets.length; i < n; ++i) {
-	    var a = this.assets[i];
+	var pending = [];
+	for (var i = 0, n = this.pending.length; i < n; ++i) {
+	    var a = this.pending[i];
 	    switch (a.state) {
-	    case 'pending':
-		pending = true;
+	    case utils.Asset.STATE_PENDING:
+		pending.push(a);
 		break;
-	    case 'error':
-		if (!error) {
-		    error = a;
-		}
+	    case utils.Asset.STATE_ERROR:
+		this.errors.push(a);
 		break;
 	    }
 	}
-	if (!pending) {
+	this.pending = pending;
+	if (pending.length == 0) {
 	    /* notify only after all assets have completed */
 	    if (this.config.loadMask) {
 		this.config.loadMask.hide();
 	    }
-	    if (error) {
-		this.error(error.reason);
+	    if (this.errors.length > 0) {
+		this.error(this.errors[0].reason);
 	    } else {
 		this.ready();
 	    }
@@ -775,6 +1066,9 @@ utils.AssetRequest = utils.extend(utils.Asset, {
 		scope: this
 	    });
 	}
+	if (this.config.responseType) {
+	    this.req.responseType = this.config.responseType;
+	}
 	this.req.open("GET", this.config.url, !this.config.sync);
 	this.req.send();
 	if (this.config.sync) {
@@ -792,7 +1086,7 @@ utils.AssetRequest = utils.extend(utils.Asset, {
 	    this.listeners = null;
 	}
 	if (this.req) {
-	    if (this.state == 'pending') {
+	    if (this.state == utils.Asset.STATE_PENDING) {
 		this.req.abort();
 	    }
 	    this.req = null;
@@ -807,10 +1101,17 @@ utils.AssetRequest = utils.extend(utils.Asset, {
     },
 
     responseJSON: function() {
+	if (this.req && this.req.responseType == 'json') {
+	    if (this.req.response == undefined) {
+		console.log("missing JSON response", this);
+	    }
+	    return this.req.response;
+	}
 	var text = this.responseText();
-	if (text != null) {
+	if (text != null && text !== "") {
 	    return JSON.parse(text);
 	} else {
+	    console.log("missing JSON response", this);
 	    return null;
 	}
     },
@@ -826,6 +1127,9 @@ utils.AssetRequest = utils.extend(utils.Asset, {
 	    );
 	    return false;
 	} else {
+	    if (this.req.responseType == 'json') {
+		//console.log(this.config.url, this.req.response);
+	    }
 	    return true;
 	}
     },
@@ -835,6 +1139,9 @@ utils.AssetRequest = utils.extend(utils.Asset, {
 
     loadEvent: function(event) {
 	if (this.statusCheck(200)) {
+	    utils.debug && console.log(
+		"loaded " + this.config.url
+	    );
 	    this.ready();
 	}
     },
@@ -859,6 +1166,14 @@ utils.AssetRequest = utils.extend(utils.Asset, {
  */
 utils.AssetImage = utils.extend(utils.Asset, {
     init: function(config) {
+	var src = config && config.src;
+	if (src) {
+	    var idx = src.lastIndexOf('.tif');
+	    if (idx > 0) {
+		// .tif not supported so try to load a .png version instead
+		config.src = src.substring(0, idx) + '.png';
+	    }
+	}
 	utils.Asset.init.call(this, config);
 	return this;
     },
@@ -887,6 +1202,48 @@ utils.AssetImage = utils.extend(utils.Asset, {
 	);
 	this.image.onload = null;
 	this.image.onerror = null;
+	this.ready();
+    }
+});
+
+/**
+ * Prototype script loader.
+ * @mixin
+ * @mixes utils.Asset
+ */
+utils.AssetScript = utils.extend(utils.Asset, {
+    init: function(config) {
+	utils.Asset.init.call(this, config);
+	return this;
+    },
+
+    cleanup: function() {
+	utils.Asset.cleanup.call(this);
+	this.script = null;
+    },
+
+    load: function() {
+	this.script = document.createElement('script');
+	this.script.type = 'text/javascript';
+	this.script.onload = this.loadEvent.bind(this);
+	this.script.onerror = this.scriptError.bind(this);
+	this.script.src = this.config.src;
+	var head = document.head || document.getElementsByTagName('head')[0];
+	head.appendChild(this.script);
+    },
+
+    scriptError: function() {
+	this.script.onload = null;
+	this.script.onerror = null;
+	this.error("error loading script " + this.config.src);
+    },
+
+    loadEvent: function() {
+	utils.debug && console.log(
+	    "loaded " + this.config.src
+	);
+	this.script.onload = null;
+	this.script.onerror = null;
 	this.ready();
     }
 });
@@ -971,3 +1328,85 @@ utils.App2d = utils.extend(utils.AppBase, {
 	this.ctx = this.canvas.getContext("2d");
     }
 });
+
+// http://www.cubic.org/docs/hermite.htm
+utils.spline_hermite = function(out, t, p0, p1, d0, d1) {
+    var t2 = Math.pow(t, 2);
+    var t3 = Math.pow(t, 3);
+    var h00 = 2 * t3 - 3 * t2 + 1;
+    var h01 = -2 * t3 + 3 * t2;
+    var h10 = t3 - 2 * t2 + t;
+    var h11 = t3 - t2;
+
+    var x = h00 * p0[0] + h10 * d0[0] + h01 * p1[0] + h11 * d1[0];
+    var y = h00 * p0[1] + h10 * d0[1] + h01 * p1[1] + h11 * d1[1];
+    out[0] = x;
+    out[1] = y;
+    return out;
+};
+
+// https://en.wikipedia.org/wiki/Kochanek%E2%80%93Bartels_spline
+utils.spline_tcb_interp = function(out, t, pp, p0, p1, pn, T, C, B) {
+    var dx0 = p0[0] - pp[0];
+    var dx1 = p1[0] - p0[0];
+    var dx2 = pn[0] - p1[0];
+    var dy0 = p0[1] - pp[1];
+    var dy1 = p1[1] - p0[1];
+    var dy2 = pn[1] - p1[1];
+
+    var a0 = (1 - T) * (1 + C) * (1 + B) / 2;
+    var a1 = (1 - T) * (1 - C) * (1 - B) / 2;
+
+    var ix = a0 * dx0 + a1 * dx1;
+    var iy = a0 * dy0 + a1 * dy1;
+
+    var a2 = (1 - T) * (1 - C) * (1 + B) / 2;
+    var a3 = (1 - T) * (1 + C) * (1 - B) / 2;
+
+    var ox = a2 * dx1 + a3 * dx2;
+    var oy = a2 * dy1 + a3 * dy2;
+
+    return utils.spline_hermite(out, t, p0, p1, [ix, iy], [ox, oy]);
+};
+
+/**
+ * knots = [
+ *  [x0, y0, T0, C0, B0],
+ *  ...
+ *  [xi, yi, Ti, Ci, Bi]
+ * ]
+ */
+utils.spline_tcb = function(x, knots) {
+    var n = knots.length;
+    utils.assert && utils.assert(
+	n >= 2,
+	"requires at least two knots",
+	arguments
+    );
+
+    var kp = knots[0];
+    if (x <= kp[0]) {
+	return kp[1];
+    }
+    var kn = knots[n - 1];
+    if (x < kn[0]) {
+	var k0, k1;
+	for (var i = 1; i < n; ++i) {
+	    kp = knots[Math.max(0, i - 2)];
+	    k0 = knots[Math.max(0, i - 1)];
+	    k1 = knots[i];
+	    kn = knots[Math.min(n - 1, i + 1)];
+	    if (x <= k1[0]) {
+		var t = (x - k0[0]) / (k1[0] - k0[0]);
+		var pt = utils.spline_tcb_interp(
+		    [0,0], t, kp, k0, k1, kn,
+		    /*T*/ k0[2] || 0,
+		    /*C*/ k0[3] || 0,
+		    /*B*/ k0[4] || 0
+		);
+		return pt[1];
+	    }
+	}
+    }
+    return kn[1];
+};

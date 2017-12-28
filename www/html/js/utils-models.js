@@ -122,7 +122,7 @@ utils.SkyBox = utils.extend(utils.Object, {
 	this.coords = Object.create(utils.ArrayBuffer3f).init(
 	    gl, "skybox.coords", coords
 	);
-	this.indices = Object.create(utils.ElementBuffer3i).init(
+	this.indices = Object.create(utils.ElementBuffer).init(
 	    gl, "skybox.indices", indices
 	);
 	return this;
@@ -134,6 +134,9 @@ utils.SkyBox = utils.extend(utils.Object, {
 	}
 	if (this.mMatrix) {
 	    program.uniforms.mMatrix.set(this.mMatrix);
+	}
+	if (this.vMatrix) {
+	    program.uniforms.vMatrix.set(this.vMatrix);
 	}
 	program.attributes.aCoord.set(this.coords);
 	program.update(gl);
