@@ -80,7 +80,7 @@ def forEach(obj, pred=None, allowLists=False):
         pass
     pass
 
-def propFind(obj, targetId, useInstDef=True, defValue=None):
+def propFind(obj, targetId, useInstDef=True, defValue=None, exclude=None):
     if isinstance(obj, (Object, dict)):
         if targetId == obj.get('id'):
             # id match
@@ -95,14 +95,20 @@ def propFind(obj, targetId, useInstDef=True, defValue=None):
         if pval is not None:
             # property match
             return pval
-        for child in obj.values():
-            pval = propFind(child, targetId, useInstDef=useInstDef)
+        for childName, child in obj.items():
+            if exclude and childName in exclude:
+                continue
+            pval = propFind(child, targetId,
+                            useInstDef=useInstDef,
+                            exclude=exclude)
             if pval is not None:
                 # child match
                 return pval
             pass
         if useInstDef and isinstance(obj, Object) and obj.instDef:
-            pval = propFind(obj.instDef, targetId, useInstDef=useInstDef)
+            pval = propFind(obj.instDef, targetId,
+                            useInstDef=useInstDef,
+                            exclude=exclude)
             if pval is not None:
                 # instDef match
                 return pval
@@ -110,7 +116,9 @@ def propFind(obj, targetId, useInstDef=True, defValue=None):
         pass
     elif isinstance(obj, list):
         for child in obj:
-            pval = propFind(child, targetId, useInstDef=useInstDef)
+            pval = propFind(child, targetId,
+                            useInstDef=useInstDef,
+                            exclude=exclude)
             if pval is not None:
                 # array element match
                 return pval
@@ -119,8 +127,11 @@ def propFind(obj, targetId, useInstDef=True, defValue=None):
     # not found
     return defValue
 
-def propGet(obj, targetId, useInstDef=True, defValue=None):
-    pval = propFind(obj, targetId, useInstDef=useInstDef, defValue=defValue)
+def propGet(obj, targetId, useInstDef=True, defValue=None, exclude=None):
+    pval = propFind(obj, targetId,
+                    useInstDef=useInstDef,
+                    defValue=defValue,
+                    exclude=exclude)
     if pval is None:
         raise Exception(
             "can't find target id {} in object {}".format(
@@ -130,7 +141,7 @@ def propGet(obj, targetId, useInstDef=True, defValue=None):
         )
     return pval
 
-def pathFind(obj, path, useInstDef=True, defValue=None):
+def pathFind(obj, path, useInstDef=True, defValue=None, exclude=None):
     roots = [obj]
     if useInstDef and isinstance(obj, Object) and obj.instDef:
         roots.append(obj.instDef)
@@ -138,7 +149,7 @@ def pathFind(obj, path, useInstDef=True, defValue=None):
     for targetId in path:
         found = []
         for root in roots:
-            root = propFind(root, targetId, useInstDef=False)
+            root = propFind(root, targetId, useInstDef=False, exclude=exclude)
             if root is not None:
                 if isinstance(root, Ref):
                     root = root.obj
@@ -157,8 +168,8 @@ def pathFind(obj, path, useInstDef=True, defValue=None):
         return roots[0]
     return defValue
 
-def pathGet(obj, path, useInstDef=True, defValue=None):
-    child = pathFind(obj, path, useInstDef=True, defValue=defValue)
+def pathGet(obj, path, useInstDef=True, defValue=None, exclude=None):
+    child = pathFind(obj, path, useInstDef=True, defValue=defValue, exclude=exclude)
     if child is None:
         raise Exception(
             "can't find path {} in {}".format(
@@ -535,11 +546,11 @@ class Object(collections.UserDict):
             )
         return obj
 
-    def propFind(self, *targetIds, defValue=None):
-        return pathFind(self, targetIds, defValue=defValue)
+    def propFind(self, *targetIds, defValue=None, exclude=None):
+        return pathFind(self, targetIds, defValue=defValue, exclude=exclude)
 
-    def propGet(self, *targetIds, defValue=None):
-        return pathGet(self, targetIds, defValue=defValue)
+    def propGet(self, *targetIds, defValue=None, exclude=None):
+        return pathGet(self, targetIds, defValue=defValue, exclude=exclude)
 
     def refsLoad(self):
         for obj in forEach(self):
@@ -661,7 +672,7 @@ class Channel(Object):
 
     @staticmethod
     def isArray(obj):
-        if isinstance(obj, list) and len(obj) > 1:
+        if isinstance(obj, list) and len(obj) >= 1:
             for child in obj:
                 if not isinstance(child, Channel):
                     return False
@@ -676,7 +687,11 @@ class Channel(Object):
             for chan in obj:
                 id = chan['id']
                 assert id not in rec
-                rec[id] = chan['value']
+                if 'current_value' in chan:
+                    rec[id] = chan['current_value']
+                else:
+                    rec[id] = chan['value']
+                    pass
                 pass
             return rec
         if isinstance(obj, Channel):
@@ -688,7 +703,11 @@ class Channel(Object):
 class ChannelBase(Channel):
     propDefs = PropDefs(Channel.propDefs, {
         'value': PD_Value,
-        'current_value': PD_Value
+        'current_value': PD_Value,
+        # undocumented properties
+        'default_image_gamma': PD_Value,
+        'image_file': PD_Value,
+        'image': PD_Value
     })
 
     def __init__(self, srcData, parent=None):
@@ -743,20 +762,13 @@ class ChannelBool(ChannelBaseMinMax):
     typeNames = ['bool']
 
     def __init__(self, srcData, parent=None):
-        ChannelValue.__init__(self, srcData, parent=parent)
+        ChannelBaseMinMax.__init__(self, srcData, parent=parent)
         pass
     pass
 
 @Object.typeRegister
 class ChannelColor(ChannelBaseMinMax):
     typeNames = ['color', 'float_color']
-
-    propDefs = PropDefs(ChannelBaseMinMax.propDefs, {
-        # undocumented properties
-        'default_image_gamma': PD_Value,
-        'image_file': PD_Value,
-        'image': PD_Value
-    })
 
     def __init__(self, srcData, parent=None):
         ChannelBaseMinMax.__init__(self, srcData, parent=parent)
@@ -1308,7 +1320,8 @@ class Presentation(Object):
         'icon_small': PD_Value,
         'colors': PD_Value,
         # undocumented property
-        'auto_fit_base': PD_Value
+        'auto_fit_base': PD_Value,
+        'preferred_base': PD_Value
     })
 
     def __init__(self, srcData, parent=None):
@@ -1359,6 +1372,7 @@ class Rigidity(Object):
         pass
     pass
     
+@Object.typeRegister
 class RigidityGroup(Object):
     propDefs = PropDefs(Object.propDefs, {
         'id': PD_Value,
