@@ -1,1036 +1,330 @@
-//utils.debug = 3;
+utils.debug = 3;
 
-utils.Material = utils.extend(utils.Object, {
-    materialDrawOrder: {
-	'Scalp-1': 1,
-	'Under-1': 2,
-	'Over-1': 3,
-	'BunShort-1': 4,
-	'BunLong-1': 5,
-	'SideBurn-1': 6
-    },
+utils.WorkerQueue = {
+    /// enable/disable pose reset in the worker
+    POSE_RESET: true,
 
-    init: function(gl, app, model, material) {
-	this.id = material.id;
-	this.drawOrder = 0;
-	this.disabled = (
-	    material.id == 'EyeMoisture-1' ||
-	    false
-	);
-	if (this.disabled) {
-	    return;
-	}
-
-	var d = this.materialDrawOrder[material.id];
-	if (d != undefined) {
-	    this.drawOrder += d;
-	}
-
-	var diffuse = material.diffuse;
-	if (diffuse) {
-	    this.diffuseColor = diffuse.color;
-	    var idx = diffuse.image;
-	    if (idx != undefined) {
-		var id = model.images[idx].id;
-		var texture = app.textures[id];
-		if (!texture && app.images[id]) {
-		    texture = utils.Texture2D.extend(
-			{ textureUnit: 0 },
-			gl, id, app.images[id]
-		    );
-		    app.textures[id] = texture;
-		    texture.update(gl);
-		}
-		if (texture) {
-		    this.diffuseTexture = texture;
-		}
-	    }
-	}
-	var cutout = material.cutout;
-	if (cutout) {
-	    var idx = cutout.image;
-	    if (idx != undefined) {
-		var id = model.images[idx].id;
-		var texture = app.textures[id];
-		if (!texture) {
-		    texture = utils.Texture2D.extend(
-			{ textureUnit: 1 },
-			gl, id, app.images[id]
-		    );
-		    app.textures[id] = texture;
-		    texture.update(gl);
-		}
-		this.cutoutTexture = texture;
-		++this.drawOrder;
-	    }
+    init: function(config) {
+	this.config = config;
+	this.workers = [];
+	this.idle = [];
+	this.states = [];
+	this.i = 0;
+	this.figure = null;
+	this.poses = [];
+	this.zeroKeys = {};
+	this.framesIn = 0;
+	this.framesOut = 0;
+	this.frames = [];
+	this.framesGood = 0;
+	this.framesMissed = 0;
+	this.frameTs = 0;	// timestamp for the next animation frame
+	this.frameInterval = 0;	// time interval in msec between frames
+	this.elapsed = utils.EMA.create(utils.EMA.alphaN(100));
+	this.run = false;
+	this.ts = null;
+	var onmessage = this.messageHandler.bind(this);
+	for (var i = 0, n = config.numWorkers || 1; i < n; ++i) {
+	    var worker = new Worker(config.script);
+	    worker.onmessage = onmessage;
+	    this.workers.push(worker);
+	    this.idle.push(i);
 	}
     },
 
-    draw: function(gl, program, renderPass) {
-	var hasTransparency = this.cutoutTexture;
-	if (hasTransparency && !renderPass.transparency) {
-	    return false;
-	}
-
-	if (program.uniforms.uColor && this.diffuseColor) {
-	    program.uniforms.uColor.set(this.diffuseColor);
-	}
-	if (program.uniforms.uHasDiffuseTexture) {
-	    if (this.diffuseTexture) {
-		this.diffuseTexture.bindTexture(gl);
-		program.uniforms.uHasDiffuseTexture.set(true);
+    messageHandler: function(event) {
+	var data = event.data;
+	var tag = data.tag;
+	var state = data.state;
+	utils.debug && console.log("messageHandler", tag);
+	if (tag && state) {
+	    var frame = tag.frame;
+	    if (frame != undefined) {
+		if (tag.start) {
+		    this.elapsed.update(self.performance.now() - tag.start);
+		}
+		this.animateReady(frame, state);
+		this.idle.push(tag.id);
+		if (this.run) {
+		    this.animateQueue();
+		}
 	    } else {
-		program.uniforms.uHasDiffuseTexture.set(false);
+		var transferList = [];
+		this.figure.transfer(state, transferList);
+		this.states.push([state, transferList]);
 	    }
 	}
-	if (program.uniforms.uHasCutoutTexture) {
-	    if (this.cutoutTexture) {
-		this.cutoutTexture.bindTexture(gl);
-		program.uniforms.uHasCutoutTexture.set(true);
-	    } else {
-		program.uniforms.uHasCutoutTexture.set(false);
-	    }
-	}
-	return true;
-    }
-});
-
-/**
- * http://www.terathon.com/code/tangent.html
- * http://www.opengl-tutorial.org/intermediate-tutorials/tutorial-13-normal-mapping/
- */
-utils.ComputeTangents = {
-    compute: function(indices, coords, normals, uvs) {
-	var n = indices.length;
-	var m = coords.length;
-	utils.assert && utils.assert(
-	    (m % 3) == 0,
-	    "coordinate buffer length must be a multiple of three"
-	);
-	utils.assert && utils.assert(
-	    normals.length == m,
-	    "invalid normal buffer length"
-	);
-	var l = m / 3;
-	utils.assert && utils.assert(
-	    uvs.length == l * 2,
-	    "invalid uv buffer length"
-	);
-	this.coords = coords;
-	this.normals = normals;
-	this.uvs = uvs;
-	this.tangents = Array(m + l).fill(0.0);
-	this.bitangents = Array(m).fill(0.0);
-	for (var i = 0; i < n; i += 3) {
-	    this.process(indices[i], indices[i + 1], indices[i + 2]);
-	}
-	for (i = 0; i < l; ++i) {
-	    this.normalize(i);
-	}
-	return this.tangents;
-    },
-
-    clear: function() {
-	this.coords = null;
-	this.normals = null;
-	this.uvs = null;
-	this.tangents = null;
-	this.bitangents = null;
-    },
-
-    process: function(i0, i1, i2) {
-	var coords = this.coords;
-	var uvs = this.uvs;
-	var bi;
-
-	// p0
-	bi = i0 * 3;
-	var x0 = coords[bi];
-	var y0 = coords[bi + 1];
-	var z0 = coords[bi + 2];
-	// uv0
-	bi = i0 * 2;
-	var u0 = uvs[bi];
-	var v0 = uvs[bi + 1];
-
-	// p1
-	bi = i1 * 3;
-	var x1 = coords[bi];
-	var y1 = coords[bi + 1];
-	var z1 = coords[bi + 2];
-	// uv1
-	bi = i1 * 2;
-	var u1 = uvs[bi];
-	var v1 = uvs[bi + 1];
-
-	// p2
-	bi = i2 * 3;
-	var x2 = coords[bi];
-	var y2 = coords[bi + 1];
-	var z2 = coords[bi + 2];
-	// uv2
-	bi = i2 * 2;
-	var u2 = uvs[bi];
-	var v2 = uvs[bi + 1];
-
-	// d1
-	var dx1 = x1 - x0;
-	var dy1 = y1 - y0;
-	var dz1 = z1 - z0;
-	// d2
-	var dx2 = x2 - x0;
-	var dy2 = y2 - y0;
-	var dz2 = z2 - z0;
-
-	// duv1
-	var du1 = u1 - u0;
-	var dv1 = v1 - v0;
-	// duv2
-	var du2 = u2 - u0;
-	var dv2 = v2 - v0;
-
-	var r = 1.0 / (du1 * dv2 - dv1 * du2);
-	var tangent = [
-	    (dx1 * dv2 - dx2 * dv1) * r,
-	    (dy1 * dv2 - dy2 * dv1) * r,
-	    (dz1 * dv2 - dz2 * dv1) * r
-	];
-	var bitangent = [
-	    (dx2 * du1 - dx1 * du2) * r,
-	    (dy2 * du1 - dy1 * du2) * r,
-	    (dz2 * du1 - dz1 * du2) * r
-	];
-
-	this.add(i0, tangent, bitangent);
-	this.add(i1, tangent, bitangent);
-	this.add(i2, tangent, bitangent);
-    },
-
-    add: function(i, tangent, bitangent) {
-	var tangents = this.tangents;
-	var bitangents = this.bitangents;
-	var bi = i * 4;
-	tangents[bi] += tangent[0];
-	tangents[bi + 1] += tangent[1];
-	tangents[bi + 2] += tangent[2];
-	bi = i * 3;
-	bitangents[bi] += bitangent[0];
-	bitangents[bi + 1] += bitangent[1];
-	bitangents[bi + 2] += bitangent[2];
-    },
-
-    normalize: function(i) {
-	var normals = this.normals;
-	var tangents = this.tangents;
-	var bitangents = this.bitangents;
-
-	// n
-	var bi = i * 3;
-	var nx = normals[bi];
-	var ny = normals[bi + 1];
-	var nz = normals[bi + 2];
-	// b
-	var bx = bitangents[bi];
-	var by = bitangents[bi + 1];
-	var bz = bitangents[bi + 2];
-	// t
-	bi = i * 4;
-	var tx = tangents[bi];
-	var ty = tangents[bi + 1];
-	var tz = tangents[bi + 2];
-
-	// Gram-Schmidt orthogonalize
-
-	var t2 = (tx * tx + ty * ty + tz * tz);
-
-	// t' = t - n * dot(n, t)
-	var dot = nx * tx + ny * ty + nz * tz;
-	tx -= nx * dot;
-	ty -= ny * dot;
-	tz -= nz * dot;
-
-	// t' = normalize(t')
-	var mag = Math.sqrt(tx * tx + ty * ty + tz * tz);
-	tx /= mag;
-	ty /= mag;
-	tz /= mag;
-	tangents[bi] = tx;
-	tangents[bi + 1] = ty;
-	tangents[bi + 2] = tz;
-
-	// Calculate handedness
-	// m = (dot(cross(n, t), b) < 0) ? -1 : 1
-	var cx = ny * tz - nz * ty;
-	var cy = nz * tx - nx * tz;
-	var cz = nx * ty - ny * tx;
-	dot = cx * bx + cy * by + cz * bz;
-	tangents[bi + 3] = dot < 0.0 ? -1.0 : 1.0;
-    }
-};
-
-/**
- * Split the surface mesh into one or more WebGL buffers.
- * Since a WebGL element buffer can only hold up to 0xFFFF indices,
- * surfaces larger than that must be split into multiple buffers.
- */
-utils.MeshBuffers = utils.extend(utils.Object, {
-    init: function(gl, surface, group_index) {
-	this.surface = surface;
-	this.group_index = group_index;
-	var group = surface.mesh.material_groups[group_index];
-	var material = surface.mesh.materials[group.material];
-	var indices = group.indices;
-	var vertices = surface.mesh.vertices;
-	var coords = surface.coords;
-	var normals = surface.normals;
-	var mode = surface.mode;
-	var delta = (mode == gl.TRIANGLES ? 3 : /* gl.LINES */ 2);
-
-	var uv_indices = group.uv_indices;
-	var uvs = surface.mesh.uv_sets[material.uv_set].uvs;
-
-	utils.assert && utils.assert(
-	    coords.length == normals.length,
-	    group.id + " coords/normals length mismatch"
-	);
-	utils.assert && utils.assert(
-	    coords.length == 3 * vertices.length,
-	    group.id + " coords/vertices length mismatch"
-	);
-	utils.assert && utils.assert(
-	    normals.length == 3 * vertices.length,
-	    group.id + " normals/vertices length mismatch"
-	);
-	utils.assert && utils.assert(
-	    indices.length % delta == 0,
-	    group.id + " indices is not a multiple of " + delta
-	);
-
-	/*
-	 * A mesh vertex might have more than one texture coordinate, so construct the
-	 * array buffers around the texture coordinates and duplicate mesh vertices
-	 * as necessary.
-	 */
-
-	this.vertexMap = [];
-	for (var i = 0, n = indices.length; i < n; ++i) {
-	    var vi = indices[i];
-	    var uvi = uv_indices[i];
-	    utils.assert && utils.assert(
-		this.vertexMap[uvi] == undefined || this.vertexMap[uvi] == vi,
-		group.id + " uv coordinate maps to multiple vertices",
-		[group, "i =", i, ", uvi =", uvi,
-		 ", old =", this.vertexMap[uvi], ", p =", indices[this.vertexMap[uvi]],
-		 ", new =", vi, ", p =", indices[vi]]
-	    );
-	    this.vertexMap[uvi] = vi;
-	}
-
-	var buffer = this.bufferInit();
-	this.buffers = [buffer];
-	for (i = 0, n = indices.length; i < n; ++i) {
-	    if ((i % delta) == 0 &&
-		buffer.count + delta > 0x10000) {
-		// start a new element buffer
-		buffer = this.bufferInit();
-		buffer.offset = i;
-		this.buffers.push(buffer);
-	    }
-
-	    var vi = indices[i];
-	    var uvi = uv_indices[i];
-	    var bi = buffer.vertexMap[uvi];
-	    if (bi == undefined) {
-		/* add vertex to buffer */
-		bi = buffer.count++;
-		buffer.vertexMap[uvi] = bi;
-		var idx = vi * 3;
-		buffer.coords.push(
-		    coords[idx],
-		    coords[idx + 1],
-		    coords[idx + 2]
-		);
-		buffer.normals.push(
-		    normals[idx],
-		    normals[idx + 1],
-		    normals[idx + 2]
-		);
-
-		/* add uv to buffer */
-		var uv = this.unUDIM(uvs[uvi]);
-		buffer.uvs.push(uv[0], uv[1]);
-	    }
-	    buffer.indices.push(bi);
-	}
-	for (i = 0, n = this.buffers.length; i < n; ++i) {
-	    if (utils.debug) {
-		this.bufferValidate(this.buffers[i], group,
-				    indices, coords, normals,
-				    uv_indices, uvs);
-	    }
-	    this.bufferCreate(this.buffers[i], gl, mode, i);
-	}
-    },
-
-    unUDIM: function(uv) {
-	var u = uv[0];
-	var v = uv[1];
-	if (u >= 1.0 || v >= 1.0) {
-	    u -= Math.floor(u);
-	    v -= Math.floor(v);
-	    return [u, v];
-	} else {
-	    return uv;
-	}
-    },
-
-    update: function() {
-	for (var i = 0, n = this.buffers.length; i < n; ++i) {
-	    this.bufferUpdate(this.buffers[i]);
-	}
-    },
-
-    draw: function(gl, program, renderPass) {
-	var mesh = this.surface.mesh;
-	var group = mesh.material_groups[this.group_index];
-	var material = mesh.materials[group.material];
-	if (material.ctx.disabled) {
-	    return;
-	}
-	if (!material.ctx.draw(gl, program, renderPass)) {
-	    return;
-	}
-	for (var i = 0, n = this.buffers.length; i < n; ++i) {
-	    this.bufferDraw(this.buffers[i], gl, program, renderPass);
-	}
-    },
-
-    bufferInit: function() {
-	return {
-	    offset: 0,
-	    count: 0,
-	    vertexMap: [],
-	    coords: [],
-	    normals: [],
-	    indices: [],
-	    uvs: []
-	};
-    },
-
-    bufferValidate: function(buffer, group,
-			     indices, coords, normals,
-			     uv_indices, uvs) {
-	for (var i = 0, n = buffer.indices.length; i < n; ++i) {
-	    var bi = buffer.indices[i] * 3;
-	    var bc0 = buffer.coords[bi];
-	    var bc1 = buffer.coords[bi + 1];
-	    var bc2 = buffer.coords[bi + 2];
-	    var uvi = uv_indices[i + buffer.offset];
-	    var vi = this.vertexMap[uvi];
-	    var ci = vi * 3;
-	    var c0 = coords[ci];
-	    var c1 = coords[ci + 1];
-	    var c2 = coords[ci + 2];
-	    utils.assert && utils.assert(
-		bc0 == c0 && bc1 == c1 && bc2 == c2,
-		group.id + " buffer coord mismatch for index " + i,
-		[bc0, bc1, bc2, c0, c1, c2]
-	    );
-
-	    var bn0 = buffer.normals[bi];
-	    var bn1 = buffer.normals[bi + 1];
-	    var bn2 = buffer.normals[bi + 2];
-	    var n0 = normals[ci];
-	    var n1 = normals[ci + 1];
-	    var n2 = normals[ci + 2];
-	    utils.assert && utils.assert(
-		bn0 == n0 && bn1 == n1 && bn2 == n2,
-		group.id + " buffer normal mismatch for index " + i,
-		[bn0, bn1, bn2, n0, n1, n2]
-	    );
-
-	    bi = buffer.indices[i] * 2;
-	    var bu = buffer.uvs[bi];
-	    var bv = buffer.uvs[bi + 1];
-	    var uv = this.unUDIM(uvs[uvi]);
-	    var u = uv[0];
-	    var v = uv[1];
-	    utils.assert && utils.assert(
-		bu == u && bv == v,
-		group.id + " buffer uv mismatch for index " + i,
-		["uv validate", group.id, "i =", i, ", vi =", vi, ", bi =", bi/2,
-		 ", uvi =", uvi, ", uv =", uv,
-		 ", bu =", bu, ", bv =", bv]
-	    );
-	}
-    },
-
-    bufferCreate: function(buffer, gl, mode, idx) {
-	var group = this.surface.mesh.material_groups[this.group_index];
-	var id = group.id;
-	buffer.coordsBuf = utils.ArrayBuffer3f.create(
-	    gl, id + ".coords." + idx, buffer.coords
-	);
-	buffer.normalsBuf = utils.ArrayBuffer3f.create(
-	    gl, id + ".normals." + idx, buffer.normals
-	);
-	buffer.uvsBuf = utils.ArrayBuffer2f.create(
-	    gl, id + ".texCoords." + idx, buffer.uvs
-	);
-	buffer.indicesBuf = utils.ElementBuffer2i.create(
-	    gl, id + ".indices." + idx, buffer.indices
-	);
-	buffer.indicesBuf.mode = mode;
-
-	if (false) {
-	var tangents = utils.ComputeTangents.compute(
-		buffer.indices,
-		buffer.coords,
-		buffer.normals,
-		buffer.uvs
-	);
-	utils.ComputeTangents.clear();
-	buffer.tangents = utils.ArrayBuffer4f.create(
-	    gl, id + ".tangents." + idx, tangents
-	);
-	}
-    },
-
-    bufferDraw: function(buffer, gl, program, renderPass) {
-	program.attributes.aCoord.set(buffer.coordsBuf);
-	program.attributes.aNormal.set(buffer.normalsBuf);
-	if (program.attributes.aTexCoord) {
-	    program.attributes.aTexCoord.set(buffer.uvsBuf);
-	}
-	program.update(gl);
-	buffer.indicesBuf.draw(gl);
-    },
-
-    bufferUpdate: function(buffer) {
-	var group = this.surface.mesh.material_groups[this.group_index];
-	var indices = group.indices;
-	var coords = this.surface.coords;
-	var normals = this.surface.normals;
-	for (var i = 0, n = buffer.indices.length; i < n; ++i) {
-	    var bi = buffer.indices[i] * 3;
-	    var ci = indices[i + buffer.offset] * 3;
-	    buffer.coords[bi] = coords[ci];
-	    buffer.coords[bi + 1] = coords[ci + 1];
-	    buffer.coords[bi + 2] = coords[ci + 2];
-
-	    buffer.normals[bi] = normals[ci];
-	    buffer.normals[bi + 1] = normals[ci + 1];
-	    buffer.normals[bi + 2] = normals[ci + 2];
-	}
-	buffer.coordsBuf.set(buffer.coords);
-	buffer.normalsBuf.set(buffer.normals);
-    }
-});
-
-/**
- * Unpack [[a, b], ...] into [a, b, ...].
- */
-utils.arrayUnpack2f = function(vec) {
-    var n = vec.length;
-    var unpacked = new Float32Array(n * 2);
-    for (var i = 0, j = 0; i < n; ++i) {
-	var rec = vec[i];
-	unpacked[j++] = rec[0];
-	unpacked[j++] = rec[1];
-    }
-    return unpacked;
-};
-
-/**
- * Unpack [[x, y, z], ...] into [x, y, z, ...].
- */
-utils.arrayUnpack3f = function(vec) {
-    var n = vec.length;
-    var unpacked = new Float32Array(n * 3);
-    for (var i = 0, j = 0; i < n; ++i) {
-	var rec = vec[i];
-	unpacked[j++] = rec[0];
-	unpacked[j++] = rec[1];
-	unpacked[j++] = rec[2];
-    }
-    return unpacked;
-};
-
-/**
- * Line surface model
- */
-utils.Surface = utils.extend(utils.Object, {
-    init: function(gl, mode, app, mesh, color) {
-	this.mode = mode;
-	this.mesh = mesh;
-	this.bonesInit(mesh.figure);
-	this.dirty = true;
-
-	var materials = mesh.materials;
-	for (var i = 0, n = materials.length; i < n; ++i) {
-	    var material = materials[i];
-	    material.ctx = utils.Material.create(gl, app, mesh, material);
-	}
-
-	var vertices = mesh.vertices;
-	var coords = utils.arrayUnpack3f(vertices);
-
-	var polygons = mesh.polygons;
-	var groups = mesh.material_groups;
-	for (i = 0, n = groups.length; i < n; ++i) {
-	    var group = groups[i];
-	    var polys = group.polygons;
-	    var uvs = group.uvs;
-	    utils.assert && utils.assert(
-		polys.length == uvs.length,
-		"length mismatch: polygons=" + polys.length + " and uvs=" + uvs.length
-	    );
-	    var indices = [];
-	    var uv_indices = [];
-	    for (var j = 0, m = polys.length; j < m; ++j) {
-		var poly = polygons[polys[j]];
-		var uv_poly = uvs[j];
-		this.initPoly(gl, mode, poly, indices, uv_poly, uv_indices);
-	    }
-	    group.indices = indices;
-	    group.uv_indices = uv_indices;
-	}
-
-	this.mvMatrix = mat4.create();
-	this.nMatrix = mat4.create();
-	this.color = color;
-	this.coords = coords;
-	this.normalsUpdate(coords);
-	this.bounds = utils.boundingBox(coords);
-	this.buffers = [];
-	for (i = 0, n = groups.length; i < n; ++i) {
-	    var group = groups[i];
-	    this.buffers.push(utils.MeshBuffers.create(gl, this, i));
-	}
-	this.buffers.sort(this.drawOrder);
-	return this;
-    },
-
-    drawOrder: function(a, b) {
-	var g1 = a.group_index,
-	    g2 = b.group_index;
-	var s1 = a.surface.mesh,
-	    s2 = b.surface.mesh;
-	var m1 = s1.material_groups[g1].material,
-	    m2 = s2.material_groups[g2].material;
-
-	// order by material draw order
-	var d = s1.materials[m1].ctx.drawOrder - s2.materials[m2].ctx.drawOrder;
-	if (d != 0) {
-	    return d;
-	}
-	// then by material
-	d = m1 - m2;
-	if (d != 0) {
-	    return d;
-	}
-	// then by group
-	return g1 - g2;
-    },
-
-    distance: function(a, b) {
-	var vertices = this.mesh.vertices;
-	return vec3.distance(vertices[a], vertices[b]);
-    },
-
-    initPoly: function(gl, mode, poly, indices, uv_poly, uv_indices) {
-	var l = poly.length;
-	var n = 0;
-
-	utils.assert && utils.assert(
-	    l == 3 || l == 4,
-	    "unsupported polygon size: " + l
-	);
-	utils.assert && utils.assert(
-	    l == uv_poly.length,
-	    "uv polygon size is " + uv_poly.length + ", but expected " + l
-	);
-	utils.assert && utils.assert(
-	    mode == gl.LINES || mode == gl.TRIANGLES,
-	    "unsupported mode: " + mode
-	);
-
-	switch (mode) {
-	case gl.LINES:
-	    if (l == 4) {
-		indices.push(
-		    poly[0], poly[1],
-		    poly[1], poly[2],
-		    poly[2], poly[3],
-		    poly[3], poly[0]
-		);
-		uv_indices.push(
-		    uv_poly[0], uv_poly[1],
-		    uv_poly[1], uv_poly[2],
-		    uv_poly[2], uv_poly[3],
-		    uv_poly[3], uv_poly[0]
-		);
-		n = 8;
-	    } else if (l == 3) {
-		indices.push(
-		    poly[0], poly[1],
-		    poly[1], poly[2],
-		    poly[2], poly[0]
-		);
-		uv_indices.push(
-		    uv_poly[0], uv_poly[1],
-		    uv_poly[1], uv_poly[2],
-		    uv_poly[2], uv_poly[0]
-		);
-		n = 6;
-	    }
-	    break;
-	case gl.TRIANGLES:
-	    if (l == 4) {
-		// split quad into tris along the shortest diagonal
-		var a = poly[0],
-		    b = poly[1],
-		    c = poly[2],
-		    d = poly[3];
-		var d1 = this.distance(a, c);
-		var d2 = this.distance(b, d);
-		if (d1 <= d2) {
-		    indices.push(
-			a, b, c,
-			c, d, a
-		    );
-		    uv_indices.push(
-			uv_poly[0], uv_poly[1], uv_poly[2],
-			uv_poly[2], uv_poly[3], uv_poly[0]
-		    );
-		} else {
-		    indices.push(
-			b, c, d,
-			d, a, b
-		    );
-		    uv_indices.push(
-			uv_poly[1], uv_poly[2], uv_poly[3],
-			uv_poly[3], uv_poly[0], uv_poly[1]
-		    );
-		}
-		n = 6;
-	    } else if (l == 3) {
-		utils.append(indices, poly);
-		utils.append(uv_indices, uv_poly);
-		n = 3;
-	    }
-	    break;
-	}
-	return n;
-    },
-
-    normalMatrix: function(program) {
-	var mvMatrix = this.mvMatrix;
-	var nMatrix = this.nMatrix;
-
-	mat4.multiply(mvMatrix, program.uniforms.vMatrix.value, this.mMatrix);
-	mat4.invert(nMatrix, mvMatrix);
-	mat4.transpose(nMatrix, nMatrix);
-
-	program.uniforms.nMatrix.set(nMatrix);
-    },
-
-    mMatrixUpdate: function(mMatrix) {
-	if (this.mMatrix) {
-	    if (!this.mMatrixBase) {
-		this.mMatrixBase = this.mMatrix;
-		this.mMatrix = mat4.clone(this.mMatrixBase);
-	    }
-	    mat4.multiply(this.mMatrix, this.mMatrixBase, mMatrix);
-	}
-    },
-
-    draw: function(gl, program, renderPass) {
-	this.meshUpdate();
-	if (program.uniforms.mMatrix && this.mMatrix) {
-	    program.uniforms.mMatrix.set(this.mMatrix);
-	    if (program.uniforms.nMatrix && this.nMatrix) {
-		this.normalMatrix(program);
-	    }
-	}
-	if (program.uniforms.uColor && this.color) {
-	    program.uniforms.uColor.set(this.color);
-	}
-	if (program.attributes.aColor && this.colors) {
-	    program.attributes.aColor.set(this.colors);
-	}
-	var buffers = this.buffers;
-	for (var i = 0, n = buffers.length; i < n; ++i) {
-	    buffers[i].draw(gl, program, renderPass);
-	}
-    },
-
-    bonesInit: function(bones) {
-	this.vertexWeights = [];
-	this.boneMap = {};
-	this.boneInit(bones);
-
-	/* normalize the vertex weights */
-	for (var i = 0, n = this.vertexWeights.length; i < n; ++i) {
-	    var vrec = this.vertexWeights[i];
-	    if (vrec != undefined) {
-		var sum = 0;
-		for (var j = 0, m = vrec.length; j < m; ++j) {
-		    sum += vrec[j][1];
-		}
-		if (m > 0 && sum != 1) {
-		    for (j = 0, m = vrec.length; j < m; ++j) {
-			vrec[j][1] /= sum;
-		    }
-		}
-	    }
-	}
-	var missing = 0;
-	var vertices = this.mesh.vertices;
-	for (i = 0, n = vertices.length; i < n; ++i) {
-	    if (this.vertexWeights[i] == undefined) {
-		++missing;
-	    }
-	}
-	if (missing > 0) {
-	    console.log("missing " + missing + " vertex node weights");
-	}
-    },
-
-    boneInit: function(bone) {
-	this.boneMap[bone.id] = bone;
-
-	var weights = bone.node_weights;
-	if (weights) {
-	    for (var i = 0, n = weights.length; i < n; ++i) {
-		var rec = weights[i];
-		var idx = rec[0];
-		var weight = rec[1];
-		var vrec = this.vertexWeights[idx];
-		if (vrec == undefined) {
-		    vrec = this.vertexWeights[idx] = [];
-		}
-		vrec.push([bone, weight]);
-	    }
-	}
-
-	var mToLocal = mat4.create();
-	var mFromLocal = mat4.create();
-	var origin = bone.center_point;
-	var t = vec3.create();
-	vec3.negate(t, origin);
-	mat4.translate(mToLocal, mToLocal, t);
-	mat4.translate(mFromLocal, mFromLocal, origin);
-	bone.mToLocal = mToLocal;
-	bone.mFromLocal = mFromLocal;
-	bone.mTransform = mat4.create();
-	bone.m = mat4.create();
-	bone.q = dquat.create();
-
-	var children = bone.children;
-	if (children) {
-	    for (var i = 0, n = children.length; i < n; ++i) {
-		var child = children[i];
-		child.parent = bone;
-		this.boneInit(child);
-	    }
-	}
-    },
-
-    boneSet: function(name, m) {
-	var bone = this.boneMap[name];
-	bone.mTransform = m;
-	this.boneUpdate(bone);
-	this.dirty = true;
-    },
-
-    boneUpdate: function(bone) {
-	var m = bone.m;
-	mat4.multiply(m, bone.mTransform, bone.mToLocal);
-	mat4.multiply(m, bone.mFromLocal, m);
-
-	// dquat
-	var q = bone.q;
-	dquat.fromMat4(q, m);
-	if (bone.parent) {
-	    dquat.multiply(q, bone.parent.q, q);
-	    dquat.normalize(q, q);
-	}
-
-	if (bone.parent) {
-	    // only needed for vertexUpdateLBS
-	    mat4.multiply(m, bone.parent.m, m);
-	}
-	if (utils.test) {
-	    // verify that q == m
-	    var mq = mat4.create();
-	    dquat.toMat4(mq, q);
-	    utils.test.mat4Eq(m, mq);
-	}
-
-	var children = bone.children;
-	if (children) {
-	    for (var i = 0, n = children.length; i < n; ++i) {
-		var child = children[i];
-		this.boneUpdate(child);
-	    }
-	}
-    },
-
-    meshUpdate: function() {
-	if (!this.dirty) {
-	    return;
-	}
-	var coords = [];
-	var vertices = this.mesh.vertices;
-	var vertexWeights = this.vertexWeights;
-	var first = true;
-	for (var i = 0, n = vertices.length; i < n; ++i) {
-	    var p = vertices[i];
-	    var weights = vertexWeights[i];
-	    if (weights != undefined) {
-		//p = this.vertexUpdateLBS(weights, p);
-		p = this.vertexUpdateDQS(weights, p);
-	    }
-	    coords.push(p[0], p[1], p[2]);
-	}
-	this.normalsUpdate(coords);
-	this.coords = coords;
-	var buffers = this.buffers;
-	for (i = 0, n = buffers.length; i < n; ++i) {
-	    buffers[i].update();
-	}
-	this.dirty = false;
-    },
-
-    vertexUpdateLBS: function(weights, p) {
-	var pt = vec3.create();
-	var pt2 = vec3.create();
-	var psum = vec3.create();
-	for (var i = 0, n = weights.length; i < n; ++i) {
-	    var vrec = weights[i];
-	    var bone = vrec[0];
-	    var weight = vrec[1];
-
-	    vec3.transformMat4(pt, p, bone.m);
-	    vec3.scale(pt, pt, weight);
-	    vec3.add(psum, psum, pt);
-	}
-	return psum;
-    },
-
-    vertexUpdateDQS: function(weights, p) {
-	var q = dquat.create();
-	var q0;
-	var qsum;
-	for (var i = 0, n = weights.length; i < n; ++i) {
-	    var vrec = weights[i];
-	    var bone = vrec[0];
-	    var weight = vrec[1];
-
-	    if (i == 0) {
-		q0 = bone.q;
-	    } else {
-		var d = dquat.dot(q0, bone.q);
-		if (d < 0) {
-		    weight = -weight;
-		}
-	    }
-
-	    dquat.scale(q, bone.q, weight);
-	    if (qsum) {
-		dquat.add(qsum, qsum, q);
-	    } else {
-		qsum = dquat.clone(q);
-	    }
-	}
-	dquat.normalize(qsum, qsum);
-	var m = mat4.create();
-	dquat.toMat4(m, qsum);
-	var pt = vec3.create();
-	vec3.transformMat4(pt, p, m);
-	return pt;
-    },
-
-    normalsUpdate: function(coords) {
-	var normals = [];
-	var groups = this.mesh.material_groups;
-	var polygons = this.mesh.polygons;
-	for (var i = 0, n = groups.length; i < n; ++i) {
-	    var polys = groups[i].polygons;
-	    for (var j = 0, m = polys.length; j < m; ++j) {
-		var poly = polygons[polys[j]];
-		var normal = this.surfaceNormal(coords, poly);
-		for (var k = 0, l = poly.length; k < l; ++k) {
-		    this.normalUpdate(poly[k], normal, normals);
-		}
-	    }
-	}
-	this.normals = this.normalsAvg(normals);
     },
 
     /**
-     * Compute the surface normal for an indexed polygon.
-     * https://www.opengl.org/wiki/Calculating_a_Surface_Normal
-     * @param {Number[]} coords the flattened vertices array
-     * @param {Integer[]} poly the vertex indices for the polygon
-     * @returns {vec3} the surface normal
+     * Add a pose to the stack.
      */
-    surfaceNormal: function(coords, poly) {
-	var normal = vec3.create();
-	var n = poly.length;
-	for (var i = 0; i < n; ++i) {
-	    var ci = poly[i] * 3;
-	    var ni = poly[(i + 1) % n] * 3;
-
-	    var cx = coords[ci];
-	    var cy = coords[ci + 1];
-	    var cz = coords[ci + 2];
-
-	    var nx = coords[ni];
-	    var ny = coords[ni + 1];
-	    var nz = coords[ni + 2];
-
-	    normal[0] += (cy - ny) * (cz + nz);
-	    normal[1] += (cz - nz) * (cx + nx);
-	    normal[2] += (cx - nx) * (cy + ny);
-	}
-	vec3.normalize(normal, normal);
-	return normal;
-    },
-
-    normalUpdate: function(index, normal, normals) {
-	var sum = normals[index];
-	if (!sum) {
-	    normals[index] = vec3.clone(normal);
-	} else {
-	    vec3.add(sum, sum, normal);
-	}
-    },
-
-    normalsAvg: function(normals) {
-	var avgs = [];
-	var missing = 0;
-	for (var i = 0, n = this.mesh.vertices.length; i < n; ++i) {
-	    var sum = normals[i];
-	    if (!sum) {
-		++missing;
-		avgs.push(0, 0, 1);
-		continue;
+    posePush: function(pose) {
+	var poses = this.poses;
+	for (var i = 0, n = poses.length; i < n; ++i) {
+	    if (poses[i] === pose) {
+		/* already added */
+		return false;
 	    }
-	    vec3.normalize(sum, sum);
-	    avgs.push(sum[0], sum[1], sum[2]);
 	}
-	if (missing > 0) {
-	    console.log("missing surface normals for " + missing + " vertices");
+	pose.reset();
+	poses.push(pose);
+	if (pose.nkeys > 1) {
+	    this.animated = true;
 	}
-	return avgs;
-    }
-});
+	var zeroKeys = this.zeroKeys;
+	var anim = pose.nkeys > 1 ? pose.config.states : pose.config.anim;
+	for (var ctrl in anim) {
+	    if (zeroKeys[ctrl] == undefined) {
+		var zeroKey = 0.0;
+		if (ctrl.indexOf('/scale/') >= 1) {
+		    /* zeroKey for scale parameters is one */
+		    zeroKey = 1.0;
+		}
+		zeroKeys[ctrl] = zeroKey;
+	    }
+	}
+	return true;
+    },
 
-var App = utils.extend(utils.App, {
-    init: function() {
-	this.initCanvas();
+    /**
+     * Remove a pose from the stack.
+     */
+    poseRemove: function(pose) {
+	if (!utils.arrayRemove(this.poses, pose)) {
+	    /* not found */
+	    return;
+	}
+	this.animated = false;
+	for (var i = 0, n = this.poses.length; i < n; ++i) {
+	    if (this.poses[i].nkeys > 1) {
+		this.animated = true;
+	    }
+	}
+    },
+
+    /**
+     * Blend all of the poses in the stack.
+     */
+    poseNext: function() {
+	var stack = [];
+        if (!this.POSE_RESET) {
+            var zeroKeys = this.zeroKeys;
+            if (zeroKeys) {
+                stack.push(zeroKeys);
+            }
+        }
+	var poses = this.poses;
+	for (var i = 0, n = poses.length; i < n; ++i) {
+	    var pose = poses[i];
+	    var ctrls = pose.nkeys == 1 ? pose.ctrls0 : pose.next();
+            stack.push(ctrls);
+	}
+	return stack;
+    },
+
+    animateStart: function(options) {
+	console.log("animateStart");
+	this.fps = options && options.fps || 24;
+	this.frameInterval = 1000.0 / this.fps;
+	this.run = true;
+	this.animateQueue();
+    },
+
+    animateStop: function() {
+	console.log("animateStop");
+	this.run = false;
+	this.ts = null;
+	this.framesGood = 0;
+	this.framesMissed = 0;
+	this.elapsed.reset();
+    },
+
+    animateQueue: function() {
+	while (this.idle.length > 0 &&
+	       this.frames.length < Math.max(this.workers.length, 3)) {
+	    if (this.animatePost()) {
+		if (!this.animated) {
+		    this.run = false;
+		    break;
+		}
+	    } else {
+		break;
+	    }
+	}
+    },
+
+    animatePost: function() {
+	if (this.idle.length == 0) {
+	    /* no idle workers available */
+	    return false;
+	}
+
+	var id = this.idle.shift();
+	var tag = {
+	    id: id,
+	    frame: this.framesOut++,
+	    start: self.performance.now()
+	};
+	utils.debug && console.log("animatePost", tag);
+
+	var msg = {
+	    tag: tag,
+            reset: this.POSE_RESET,
+	    controls: this.poseNext()
+	};
+	if (this.states.length > 0) {
+	    /* transfer a cached state to the worker */
+	    var rec = this.states.pop();
+	    msg.state = rec[0];
+	    this.workers[id].postMessage(msg, rec[1]);
+	} else {
+	    this.workers[id].postMessage(msg);
+	}
+	return true;
+    },
+
+    animateReady: function(idx, state) {
+	if (idx < this.framesIn) {
+	    /* discard out-of-order animation frames */
+	    return;
+	}
+
+	var frames = this.frames;
+	var n = frames.length;
+	if (n == 0 || frames[n - 1][0] < idx) {
+	    frames.push([idx, state]);
+	}
+	for (var i = 0; i < n; ++i) {
+	    var rec = frames[i];
+	    if (idx < rec[0]) {
+		frames.splice(i, 0, [idx, state]);
+		break;
+	    }
+	}
+    },
+
+    animateShow: function() {
+	if (!this.run) {
+	    /* no animations running */
+	    //return;
+	}
+	if (this.frames.length == 0) {
+	    /* no animation frames are ready yet */
+	    if (this.run) {
+		++this.framesMissed;
+		this.animateQueue();
+	    }
+	    return;
+	}
+	var now = self.performance.now();
+	var ts = this.frameTs;
+	if (ts == 0) {
+	    this.frameTs = ts = now;
+	} else if (now < ts) {
+	    /* wait */
+	    return;
+	}
+	this.animateOutput();
+
+	ts += this.frameInterval;
+	if (ts < now) {
+	    ++this.framesMissed;
+	    ts = now + this.frameInterval;
+	}
+	this.frameTs = ts;
+    },
+
+    animateOutput: function() {
+	var frames = this.frames;
+	var n = frames.length;
+	if (n > 0) {
+	    var rec = frames[0];
+	    var framesIn = this.framesIn;
+	    if (rec[0] == framesIn) {
+		this.framesIn = framesIn + 1;
+		frames.shift();
+		var transferList = [];
+		this.figure.transfer(rec[1], transferList);
+		this.states.push([rec[1], transferList]);
+	    }
+	    ++this.framesGood;
+	} else {
+	    ++this.framesMissed;
+	}
+
+	if (this.run) {
+	    this.animateQueue();
+	} else {
+	    if (frames.length == 0) {
+		//this.ts = null;
+		return;
+	    }
+	}
+
+	var now = self.performance.now();
+	var ts = this.ts;
+	if (ts == null) {
+	    this.ts = now;
+	    this.start = now;
+	    return;
+	}
+	var elapsed = now - ts;
+	if (elapsed >= 2000) {
+	    var fps = 1000 * this.framesGood / (now - this.start);
+	    false && console.log(
+		"frame stats: queue=" + n,
+		" good=" + this.framesGood,
+		" missed=" + this.framesMissed,
+		" fps=" + fps.toFixed(1),
+		" worker=" + this.elapsed.ema.toFixed(2)
+	    );
+	    this.ts = now;
+	    if (this.overlay) {
+		this.overlay.show({
+		    "fps": fps.toFixed(1),
+		    "frames": this.framesGood.toFixed(0),
+		    "missed": this.framesMissed.toFixed(0),
+		    "render": App.renderTime.ema.toFixed(2) + " ms",
+		    "worker": this.elapsed.ema.toFixed(2) + " ms \u00d7" +  this.workers.length
+		});
+	    }
+	}
+    },
+
+    postMessage: function(msg) {
+	var i = this.i++;
+	var n = this.workers.length;
+	if (i >= n) {
+	    i = this.i = 0;
+	}
+	var tag = msg.tag;
+	if (!tag) {
+	    tag = msg.tag = {};
+	}
+	tag.id = i;
+	this.workers[i].postMessage(msg);
+    },
+
+    broadcastMessage: function(msg) {
+	var tag = msg.tag;
+	if (!tag) {
+	    tag = msg.tag = {};
+	}
+	tag.broadcast = true;
+	for (var i = 0, n = this.workers.length; i < n; ++i) {
+	    tag.id = i;
+	    this.workers[i].postMessage(msg);
+	    tag.noreply = true; // only need reply from the first msg
+	}
+    }
+};
+
+var App = utils.extend(utils.WebVR, {
+    VR_ENABLE: true,
+    WORKER_ENABLE: true,
+
+    initAssets: function() {
 	var gl = this.gl;
 
 	var assets = {
@@ -1048,11 +342,7 @@ var App = utils.extend(utils.App, {
 		    aCoord: utils.AttributeBuffer.create()
 		}
 	    }),
-	    skyBox: utils.AssetTextureCubeMap.create({
-		debug: false,
-		src: "lib/images/skybox_texture.jpg",
-		crop: 2 // TBD: only need to crop specific sides
-	    }),
+	    skyBox: utils.AssetTextureCubeMap.create(Assets.skybox),
 	    shaderSurface: utils.AssetShader.create({
 		gl: gl,
 		name: "shaderSurface",
@@ -1068,72 +358,224 @@ var App = utils.extend(utils.App, {
 		    uLightDirection: utils.Uniform3f.create(),
 		    uAmbientColor: utils.Uniform3f.create(),
 		    uSpecularColor: utils.Uniform3f.create(),
+		    uShininess: utils.Uniform1f.create(),
 		    uHasDiffuseTexture: utils.Uniform1i.create(),
 		    uDiffuseTexture: utils.Uniform1i.create(),
+		    uHasNormalTexture: utils.Uniform1i.create(),
+		    uNormalTexture: utils.Uniform1i.create(),
+		    uHasBumpTexture: utils.Uniform1i.create(),
+		    uBumpTexture: utils.Uniform1i.create(),
+		    uBumpTextureSize: utils.Uniform1i.create(),
+		    uBumpStrength: utils.Uniform1f.create(),
+		    uHasSpecularTexture: utils.Uniform1i.create(),
+		    uSpecularTexture: utils.Uniform1i.create(),
 		    uHasCutoutTexture: utils.Uniform1i.create(),
-		    uCutoutTexture: utils.Uniform1i.create()
+		    uCutoutTexture: utils.Uniform1i.create(),
+		    uCutoutThreshold: utils.Uniform1f.create(),
+		    uTranslucent: utils.Uniform1i.create(),
+		    uTransparencyPhase: utils.Uniform1i.create(),
+		    uSkin: utils.Uniform1i.create(),
+		    uTexScaleMin: utils.Uniform1f.create(),
+		    uTexScaleMax: utils.Uniform1f.create()
 		},
 		attributes: {
 		    aCoord: utils.AttributeBuffer.create(),
 		    aNormal: utils.AttributeBuffer.create(),
-		    aTexCoord: utils.AttributeBuffer.create()
+		    aTangent: utils.AttributeBuffer.create(),
+		    aTexCoord: utils.AttributeBuffer.create(),
+		    aTexScale: utils.AttributeBuffer.create()
 		}
+	    }),
+	    shaderLine: utils.AssetShader.create({
+		gl: gl,
+		name: "shaderLine",
+		vertexShaderURL: "shaders/line.vert",
+		fragmentShaderURL: "shaders/line.frag",
+		uniforms: {
+		    mMatrix: utils.UniformMat4.create(),
+		    vMatrix: utils.UniformMat4.create(),
+		    pMatrix: utils.UniformMat4.create(),
+		    nMatrix: utils.UniformMat4.create(),
+		    uColor: utils.Uniform3f.create()
+		},
+		attributes: {
+		    aCoord: utils.AttributeBuffer.create()
+		}
+	    }),
+	    platform: utils.AssetFigure.create({
+		url: "lib/models/platform.json"
 	    })
 	};
-	if (true) {
-	    assets.figure = utils.AssetRequest.create({
-		url: "lib/models/figure.json"
+	for (var i = 0, n = Assets.poses.length; i < n; ++i) {
+	    var pose = Assets.poses[i];
+	    if (!pose.enabled) {
+		continue;
+	    }
+	    assets[pose.url] = utils.AssetRequest.create({
+		responseType: 'json',
+		url: pose.url
 	    });
 	}
-	if (true) {
-	    assets.hair = utils.AssetRequest.create({
-		url: "lib/models/hair.json"
-	    });
-	}
-	this.loader.batch(assets);
-	this.loadState = 'init';
-	this.loader.load();
-    },
+	this.poseReverse = false;
 
-    ready: function() {
-	this.textureLoader = utils.AssetLoader.create({
-	    loadMask: this.loadMask,
-	    ready: this.texturesReady,
-	    error: this.error,
-	    scope: this
+	var model = Assets.model;
+	this.preset = model.preset;
+        if (!this.preset) {
+            this.preset = {};
+        }
+	assets.figure = utils.AssetFigure.create({
+	    url: model.figure,
+            remap: model.remap
 	});
-	if (this.loader.cache.figure) {
-	    this.figure = this.loader.cache.figure.responseJSON();
-	    this.texturesLoad(this.figure);
-	}
-	if (this.loader.cache.hair) {
-	    this.hair = this.loader.cache.hair.responseJSON();
-	    this.texturesLoad(this.hair);
-	}
-	this.textureLoader.load();
-    },
-
-    texturesLoad: function(model) {
-	var images = model.images;
-	if (images) {
-	    var batch = {};
-	    for (var i = 0, n = images.length; i < n; ++i) {
-		var image = images[i];
-		var src = "lib/textures/" + image.image;
-		var idx = src.lastIndexOf('.tif');
-		if (idx > 0) {
-		    // try to load a .png version
-		    src = src.substring(0, idx) + '.png';
-		}
-		batch[image.id] = utils.AssetImage.create({
-		    src: src
+	if (true && model.scripts) {
+	    this.modelScripts = model.scripts;
+	    for (var i = 0, n = model.scripts.length; i < n; ++i) {
+		var script = model.scripts[i];
+		assets[script] = utils.AssetScript.create({
+		    src: script
 		});
 	    }
-	    this.textureLoader.batch(batch);
 	}
+
+	if (Assets.hair) {
+	    assets.hair = utils.AssetFigure.create(Assets.hair);
+	}
+        if (Assets.wearables) {
+            for (var i = 0, n = Assets.wearables.length; i < n; ++i) {
+                var wearable = Assets.wearables[i];
+                var name = wearable.name;
+                if (name) {
+                    wearable.key = name;
+	            assets[name] = utils.AssetFigure.create({
+	                name: name
+	            });
+                } else {
+                    var url = wearable.url;
+                    wearable.key = url;
+	            assets[url] = utils.AssetFigure.create({
+	                url: url
+	            });
+                }
+                var script = wearable.script;
+                if (script) {
+	            assets[script] = utils.AssetScript.create({
+		        src: script
+	            });
+	            this.modelScripts.push(script);
+                }
+                if (wearable.preset) {
+                    utils.merge(this.preset, wearable.preset);
+                }
+            }
+        }
+	this.loader.batch(assets);
     },
 
-    texturesReady: function() {
+    poseTweak: function(pose) {
+	var n = pose.length;
+	if (n <= 1) {
+	    return pose;
+	}
+	var init = {};
+	for (var i = 0; i < n; ++i){
+	    var ctrls = pose[i][1];
+	    for (var ctrl in ctrls) {
+		init[ctrl] = ctrls[ctrl];
+	    }
+	    for (ctrl in init) {
+		if (ctrls[ctrl] == undefined) {
+		    //console.log("pose missing", i, ctrl, init[ctrl]);
+		    ctrls[ctrl] = init[ctrl];
+		}
+	    }
+	}
+	return pose;
+    },
+
+    readyAssets: function() {
+	this.renderTime = utils.EMA.create(utils.EMA.alphaN(100));
+
+	var library = {};
+	if (this.loader.cache.figure) {
+	    this.figure = this.loader.cache.figure.get(library);
+            this.figure.preset = this.preset;
+	}
+	var items = [];
+	if (this.loader.cache.hair) {
+	    this.hair = this.loader.cache.hair.get(library);
+	    items.push(this.hair);
+	}
+        var wearables = [];
+        if (Assets.wearables) {
+            for (var i = 0, n = Assets.wearables.length; i < n; ++i) {
+                var key = Assets.wearables[i].key;
+                if (this.loader.cache[key]) {
+                    var asset = this.loader.cache[key].get(library);
+                    items.push(asset);
+                    wearables.push(asset);
+                }
+            }
+        }
+	this.poseIdx = 0;
+	this.poses = [];
+        if (false) {
+            var anims = [];
+            var first = null;
+            for (var i = 0, n = Assets.poses.length; i < n; ++i) {
+	        var pose = Assets.poses[i];
+	        if (!pose.enabled) {
+	            continue;
+	        }
+                var anim = this.loader.cache[pose.url].responseJSON();
+                anims.push(anim);
+                if (!first) {
+                    first = pose;
+                }
+            }
+            this.poses = [
+                [first, utils.AnimationMapSampler.sequence(anims)]
+            ];
+        } else {
+            for (var i = 0, n = Assets.poses.length; i < n; ++i) {
+	        var pose = Assets.poses[i];
+	        if (!pose.enabled) {
+	            continue;
+	        }
+	        this.poses.push(
+                    [pose, this.loader.cache[pose.url].responseJSON()]
+                );
+            }
+        }
+	for (var i = 0, n = this.poses.length; i < n; ++i) {
+	    var rec = this.poses[i];
+            var pose = rec[0];
+	    var anim = rec[1];
+	    utils.assert && utils.assert(
+		!Array.isArray(anim),
+		"anim " + pose.url + " is an array"
+	    );
+	    if (this.figure.figure.id == 'Genesis8Female') {
+                // TBD: need to know what pose adjustments to apply
+		utils.AnimationMapSampler.patch(anim, 'lShldrBend/rotation/z', 45);
+		utils.AnimationMapSampler.patch(anim, 'rShldrBend/rotation/z', -45);
+		utils.AnimationMapSampler.patch(anim, 'lThighBend/rotation/z', -6);
+		utils.AnimationMapSampler.patch(anim, 'rThighBend/rotation/z', 6);
+	    }
+	    var patch = pose.patch;
+	    if (patch) {
+		for (var ctrl in patch) {
+		    utils.AnimationMapSampler.patch(anim, ctrl, patch[ctrl]);
+		}
+	    }
+	    this.poses[i] = utils.AnimationSampler.create({
+		name: pose.url,
+		anim: anim,
+		//fps: 90
+		//fps: 30
+		fps: 45
+	    });
+	}
+
 	var gl = this.gl;
 
 	this.shaderSkyBox = this.loader.cache.shaderSkyBox.program;
@@ -1141,58 +583,161 @@ var App = utils.extend(utils.App, {
 
 	this.skyBox = utils.SkyBox.create(gl);
 	this.skyBox.mMatrix = mat4.create();
+	mat4.rotateY(this.skyBox.mMatrix, this.skyBox.mMatrix, utils.radians(180));
+	this.skyBox.vMatrix = mat4.create();
 	this.skyBox.texture = utils.TextureSkyMap.extend(
 	    { flipY: true },
 	    gl, "skyBox", this.loader.cache.skyBox.textures
 	);
 
-	var uLightDirection = vec3.fromValues(0.85, 0.8,0.75);
-	vec3.normalize(uLightDirection, uLightDirection);
+	var lightDirection = vec3.fromValues(0.85, 0.8,0.75);
+	vec3.normalize(lightDirection, lightDirection);
+	this.lightDirection = lightDirection;
+	this.uLightDirection = vec3.clone(lightDirection);
+	this.ivMatrix = mat3.create();
+
 	this.shaderSurface = this.loader.cache.shaderSurface.program;
-	this.shaderSurface.uniforms.uLightColor.set([0.5, 0.5, 0.5]);
+	//this.shaderSurface.uniforms.uLightColor.set([0.5, 0.5, 0.5]);
+	var brightness = 0.6;
+	this.shaderSurface.uniforms.uLightColor.set([brightness*255/255, brightness*147/255, brightness*41/255]);
 	//this.shaderSurface.uniforms.uLightColor.set([1.0, 1.0, 1.0]);
-	this.shaderSurface.uniforms.uLightDirection.set(uLightDirection);
+	this.shaderSurface.uniforms.uLightDirection.set(this.uLightDirection);
 	this.shaderSurface.uniforms.uAmbientColor.set([0.4, 0.4, 0.4]);
 	this.shaderSurface.uniforms.uSpecularColor.set([0.35, 0.45, 0.5]);
+	this.shaderSurface.uniforms.uShininess.set(3.0);
 	this.shaderSurface.uniforms.uHasDiffuseTexture.set(false);
 	this.shaderSurface.uniforms.uDiffuseTexture.set(0);
+	this.shaderSurface.uniforms.uHasNormalTexture.set(false);
+	this.shaderSurface.uniforms.uNormalTexture.set(1);
+	this.shaderSurface.uniforms.uHasBumpTexture.set(false);
+	this.shaderSurface.uniforms.uBumpTexture.set(2);
+	this.shaderSurface.uniforms.uBumpStrength.set(1.0);
+	this.shaderSurface.uniforms.uHasSpecularTexture.set(false);
+	this.shaderSurface.uniforms.uSpecularTexture.set(3);
 	this.shaderSurface.uniforms.uHasCutoutTexture.set(false);
-	this.shaderSurface.uniforms.uCutoutTexture.set(1);
+	this.shaderSurface.uniforms.uCutoutTexture.set(4);
+	this.shaderSurface.uniforms.uCutoutThreshold.set(0.8);
+	this.shaderSurface.uniforms.uTransparencyPhase.set(false);
 
-	this.images = {};
-	for (var id in this.textureLoader.cache) {
-	    var image = this.textureLoader.cache[id];
-	    this.images[id] = image.image;
+	if (this.hair) {
+            // TBD: need per-model uniforms
+            switch (this.hair.figure.id) {
+            case 'aprilyshVossHairG8F_80330':
+	        this.shaderSurface.uniforms.uCutoutThreshold.set(0.55);
+                break;
+            case 'GwenniliHairA_49547':
+	        this.shaderSurface.uniforms.uCutoutThreshold.set(0.65);
+                break;
+            }
 	}
-	this.textures = {};
-	this.textureLoader.cleanup();
+
+	this.shaderLine = this.loader.cache.shaderLine.program;
+
+	var wireframe = utils.Surface.debug;
+	if (this.WORKER_ENABLE && window.Worker) {
+	    utils.WorkerQueue.init({
+		numWorkers: 3,
+		script: "js/figure-worker.js"
+	    });
+	    this.worker = utils.WorkerQueue;
+	    this.worker.overlay = utils.Overlay.create();
+	    this.worker.broadcastMessage({
+		scripts: this.modelScripts,
+		models: {
+		    wireframe: wireframe,
+		    figure: this.figure,
+		    items: items
+		}
+	    });
+	}	
+	utils.listeners(document, {
+	    keypress: this.keyPressEvent,
+	    scope: this
+ 	});
+
+	this.platform = utils.Surface.create(gl, this.loader.cache.platform.get(library), library);
+	this.platform.mMatrix = mat4.create();
 
 	this.models = [];
-	if (this.hair) {
-	    this.hair = utils.Surface.create(
-		gl,
-		//gl.LINES,
-		gl.TRIANGLES,
-		this,
-		this.hair,
-		[1, 1, 1]
-	    );
-	    this.models.push(this.hair);
-	}
 	if (this.figure) {
 	    this.figure = utils.Surface.create(
 		gl,
-		//gl.LINES,
-		gl.TRIANGLES,
-		this,
 		this.figure,
-		[1, 1, 1]
+		library,
+		wireframe
 	    );
+	    this.controls = this.figure.controls;
+	    if (this.hair) {
+		this.hair = utils.Surface.create(
+		    gl,
+		    this.hair,
+		    library,
+		    wireframe
+		);
+		this.models.push(this.hair);
+		this.figure.followers.push(this.hair);
+	    }
+            for (var i = 0, n = wearables.length; i < n; ++i) {
+		var wearable = utils.Surface.create(
+		    gl,
+		    wearables[i],
+		    library,
+		    wireframe
+		);
+                wearables[i] = wearable;
+		this.models.push(wearable);
+		this.figure.followers.push(wearable);
+		false && utils.AutoFit.create(wearable, this.figure, 30);
+            }
+
+	    var controls = this.preset; 
+            true && this.controls.start(controls);
+	    if (this.worker) {
+		this.worker.figure = this.figure;
+                if (this.worker.POSE_RESET) {
+	            this.controls.start(controls);
+		    this.figure.transform(this.controls);
+                    this.figure.meshUpdate();
+                } else {
+	            this.worker.broadcastMessage({
+		        tag: {
+		            msg: "initial controls"
+		        },
+		        controls: controls
+		    });
+                }
+	    } else {
+		true && this.controls.start(controls);
+		true && this.pose && this.controls.start(this.pose[0][1]);
+		true && this.figure.transform(this.controls);
+	    }
+
+	    if (this.worker) {
+/*
+		this.worker.broadcastMessage({
+		    tag: {
+			msg: "initial pose"
+		    },
+		    controls: this.poses[this.poseIdx].ctrls0
+		});
+*/
+		this.worker.posePush(this.poses[this.poseIdx]);
+	    }
+
+	    this.visemes = [];
+	    for (var ctrl in ModifierLibrary.Genesis3Female) {
+		if (ctrl.startsWith("eCTRLv")) {
+		    var anim = {};
+		    anim[ctrl] = 1.0;
+		    this.visemes.push(utils.AnimationSampler.create({
+			anim: anim
+		    }));
+		}
+	    }
 	    this.models.push(this.figure);
 	}
 
 	var bounds = this.models[0].bounds;
-	console.log("bounds", bounds);
 	var size = Math.max(
 	    bounds.width,
 	    bounds.height,
@@ -1203,38 +748,130 @@ var App = utils.extend(utils.App, {
 	    (bounds.ymax + bounds.ymin) / 2,
 	    (bounds.zmax + bounds.zmin) / 2
 	];
-	var mMatrix = mat4.create();
-	//mat4.translate(mMatrix, mMatrix, [0, -2.5, -5]);
-	mat4.translate(mMatrix, mMatrix, [0, -3.75, -0.75]);
-	var scale = 4 / bounds.ymax;
-	//var scale = 4/size;
-	mat4.scale(mMatrix, mMatrix, [scale, scale, scale]);
+	var mMatrix = Assets.mMatrix(this.VR_ENABLE, bounds);
 	for (var i = 0, n = this.models.length; i < n; ++i) {
 	    this.models[i].mMatrix = mMatrix;
 	}
 
-	var ang = utils.radians(60);
-	var ry = mat4.create();
-	mat4.rotateY(ry, ry, -ang);
-	var rx = mat4.create();
-	mat4.rotateX(rx, rx, -ang);
-	var nrx = mat4.create();
-	mat4.rotateX(nrx, nrx, ang);
-	if (this.figure) {
-	    this.figure.boneSet('lForearmBend', ry);
-	    this.figure.boneSet('lThighBend', rx);
-	    this.figure.boneSet('lShin', nrx);
-	    // TBD: move hair to match head
-	    //this.figure.boneSet('head', ry);
-	    //this.figure.boneSet('abdomenLower', nrx);
-	}
-
-	//gl.clearColor(0, 0, 0, 1);
-
 	var vMatrix = mat4.create();
 	this.vMatrixUpdate(vMatrix, vMatrix);
-	utils.ModelController.init(this, center);
-	utils.App.ready.call(this);
+	utils.ModelController.init(this, this.figure.boneMap.hip.center_point);
+
+	utils.debug = 0;
+    },
+
+    keyPressEvent: function(event){
+	switch (event.key) {
+	case ' ':
+	    /* start/stop animation */
+	    this.frameRun = !this.frameRun;
+	    if (this.frameRun) {
+		this.worker.animateStart({
+		    //fps: this.VR_ENABLE ? 12 : 24
+		});
+	    } else {
+		this.worker.animateStop();
+	    }
+	    break;
+	case 'p':
+	    if (this.poses.length <= 1) {
+		break;
+	    }
+	    this.frameRun = true;
+	    this.worker.animateStop();
+	    this.worker.poseRemove(this.poses[this.poseIdx]);
+	    if (++this.poseIdx >= this.poses.length) {
+		this.poseIdx = 0;
+	    }
+	    console.log("pose", this.poses[this.poseIdx].config.name);
+	    this.worker.posePush(this.poses[this.poseIdx]);
+	    this.worker.animateStart({
+		//fps: this.VR_ENABLE ? 12 : 24
+	    });
+	    break;
+	case 'v':
+	case 'V':
+	    /* show/clear random viseme */
+	    if (this.visemePrev) {
+		this.worker.poseRemove(this.visemePrev);
+		this.visemePrev = null;
+	    }
+	    if (event.key == 'v') {
+		var n = this.visemes.length;
+		var viseme = this.visemes[Math.floor(Math.random() * n)];
+		console.log("viseme", viseme);
+		this.worker.posePush(viseme);
+		this.visemePrev = viseme;
+	    }
+	    break;
+	}
+    },
+    frameNext: function() {
+	if (this.blendPose) {
+	    var mix = this.blendCtrl + this.blendStep * this.blendDir;
+	    if (mix < this.blendMin) {
+		mix = this.blendMin + this.blendStep;
+		this.blendDir = +1;
+	    }
+	    if (mix > this.blendMax) {
+		mix = this.blendMax - this.blendStep;
+		this.blendDir = -1;
+	    }
+	    this.blendCtrl = mix;
+
+	    var blend = {};
+	    var pose = this.pose[0][1];
+	    for (var id in pose) {
+		blend[id] = pose[id] * mix;
+	    }
+	    pose = this.blendPose[0][1];
+	    mix = 1.0 - mix;
+	    for (id in pose) {
+		var val = blend[id];
+		if (val == undefined) {
+		    val = 0;
+		}
+		blend[id] = val + pose[id] * mix;
+	    }
+	    var start = window.performance.now();
+	    this.controls.start(blend);
+	    this.figure.transform(this.controls);
+	    var elapsed = window.performance.now() - start;
+	    utils.debug && console.log("blend", this.blendCtrl, blend, elapsed);
+	    return;
+	}
+	var frameIdx = this.frameIdx;
+	var frame = this.pose[frameIdx];
+	if (this.poseReverse) {
+	    if (this.frameReverse) {
+		if (--frameIdx < 0) {
+		    frameIdx = 0;
+		    this.frameReverse = false;
+		}
+	    } else {
+		if (++frameIdx >= this.pose.length) {
+		    this.frameReverse = true;
+		    frameIdx = this.pose.length - 1;
+		}
+	    }
+	} else {
+		if (++frameIdx >= this.pose.length) {
+		    frameIdx = 0;
+		}
+	}
+	this.frameIdx = frameIdx;
+	if (this.worker){
+	    this.worker && this.worker.postMessage({
+		msg: "frame #" + this.frameIdx,
+		controls: frame[1]
+	    }); 
+	} else {
+	    var start = window.performance.now();
+	    this.controls.start(frame[1]);
+	    this.figure.transform(this.controls);
+	    var elapsed = window.performance.now() - start;
+	    utils.debug && console.log("frame", this.frameIdx, elapsed);
+	}
     },
 
     resize: function() {
@@ -1243,14 +880,19 @@ var App = utils.extend(utils.App, {
     },
 
     pMatrixUpdate: function(pMatrix) {
-	this.shaderSkyBox.uniforms.pMatrix.set(pMatrix);
-	this.shaderSurface.uniforms.pMatrix.set(pMatrix);
+	console.log("pMatrixUpdate");
+        this.shaderSkyBox.uniforms.pMatrix.set(pMatrix);
+        this.shaderSurface.uniforms.pMatrix.set(pMatrix);
+        this.shaderLine.uniforms.pMatrix.set(pMatrix);
     },
     vMatrixUpdate: function(vMatrix, vMatrixFixed) {
-	this.shaderSkyBox.uniforms.vMatrix.set(vMatrixFixed);
-	this.shaderSurface.uniforms.vMatrix.set(vMatrix);
+	console.log("vMatrixUpdate");
+        this.shaderSkyBox.uniforms.vMatrix.set(vMatrixFixed);
+        this.shaderSurface.uniforms.vMatrix.set(vMatrix);
+        this.shaderLine.uniforms.vMatrix.set(vMatrix);
     },
     mMatrixUpdate: function(mMatrix) {
+	utils.debug && console.log("mMatrixUpdate");
 	for (var i = 0, n = this.models.length; i < n; ++i) {
 	    this.models[i].mMatrixUpdate(mMatrix);
 	}
@@ -1261,30 +903,53 @@ var App = utils.extend(utils.App, {
 	{ name: "transparency", transparency: true }
     ],
 
+    renderDebugPass: { name: "debug", debug: true },
+
     render: function() {
+        var now = self.performance.now();
+	if (this.worker) {
+	    this.worker.animateShow();
+	}
+
 	var gl = this.gl;
-
 	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+	gl.enable(gl.CULL_FACE);
 
+if (true) {
 	this.shaderSkyBox.useProgram(gl);
 	this.skyBox.draw(gl, this.shaderSkyBox);
+}
 
+	var m = this.models.length;
+
+if (true) {
+	this.shaderLine.useProgram(gl);
+	gl.enable(gl.DEPTH_TEST);
+	gl.depthMask(true);
+
+	for (var j = 0; j < m; ++j) {
+	    this.models[j].draw(gl, this.shaderLine, this.renderDebugPass);
+	}
+}
+
+if (true) {
 	this.shaderSurface.useProgram(gl);
 
 	// TBD: make back face culling material dependent
 	//gl.enable(gl.CULL_FACE);
 	// some of the hair backfaces need to be displayed
-	gl.disable(gl.CULL_FACE);
+	//gl.disable(gl.CULL_FACE);
 
-	var m = this.models.length;
 	for (var i = 0, n = this.renderPasses.length; i < n; ++i) {
 	    var renderPass = this.renderPasses[i];
 	    if (renderPass.transparency) {
+		this.shaderSurface.uniforms.uTransparencyPhase.set(true);
 		gl.depthMask(false);
 		gl.enable(gl.BLEND);
 		// pre-multiplied alpha
 		gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 	    } else {
+		this.shaderSurface.uniforms.uTransparencyPhase.set(false);
 		gl.enable(gl.DEPTH_TEST);
 		gl.depthMask(true);
 		gl.depthFunc(gl.LESS);
@@ -1294,8 +959,105 @@ var App = utils.extend(utils.App, {
 		this.models[j].draw(gl, this.shaderSurface, renderPass);
 	    }
 	}
+}
 
 	utils.debug = 0;
-	window.requestAnimationFrame(this.render.bind(this));
+        this.renderRequest();
+	this.renderTime.update(self.performance.now() - now);
+    },
+
+    vrRender: function(timestamp, frameData) {
+	var now = timestamp;
+	if (this.worker) {
+	    this.worker.animateShow();
+	}
+
+	var gl = this.gl;
+	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+	gl.enable(gl.CULL_FACE);
+
+	var canvas = this.canvas;
+	var w = canvas.width * 0.5;
+	var h = canvas.height;
+
+	this.shaderSkyBox.useProgram(gl);
+
+	gl.viewport(0, 0, w,  h);
+	this.vrDrawSkyBox(frameData.leftProjectionMatrix,
+			  frameData.leftViewMatrix);
+
+	gl.viewport(w, 0, w, h);
+	this.vrDrawSkyBox(frameData.rightProjectionMatrix,
+			  frameData.rightViewMatrix);
+
+	this.shaderSurface.useProgram(gl);
+
+	// TBD: make back face culling material dependent
+	//gl.enable(gl.CULL_FACE);
+	// some of the hair backfaces need to be displayed
+	//gl.disable(gl.CULL_FACE);
+
+	gl.viewport(0, 0, w,  h);
+	this.vrDraw(frameData.leftProjectionMatrix,
+		    frameData.leftViewMatrix);
+
+	gl.viewport(w, 0, w, h);
+	this.vrDraw(frameData.rightProjectionMatrix,
+		    frameData.rightViewMatrix);
+
+	this.renderTime.update(self.performance.now() - now);
+    },
+
+    vrDrawSkyBox: function(pMatrix, vMatrix) {
+	var gl = this.gl;
+	var program = this.shaderSkyBox;
+
+	var v = this.skyBox.vMatrix;
+	mat4.copy(v, vMatrix);
+	v[12] = v[13] = v[14] = 0;
+	program.uniforms.pMatrix.set(pMatrix);
+	program.uniforms.vMatrix.set(v);
+
+	this.skyBox.draw(gl, program);
+    },
+
+    vrDraw: function(pMatrix, vMatrix) {
+	var gl = this.gl;
+	var program = this.shaderSurface;
+
+	var ivMatrix = this.ivMatrix;
+	mat3.fromMat4(ivMatrix, vMatrix);
+	mat3.invert(ivMatrix, ivMatrix);
+	mat3.transpose(ivMatrix, ivMatrix);
+	var uLightDirection = this.uLightDirection;
+	vec3.transformMat3(uLightDirection,
+			   this.lightDirection,
+			   ivMatrix);
+
+	program.uniforms.uLightDirection.set(uLightDirection);
+	program.uniforms.pMatrix.set(pMatrix);
+	program.uniforms.vMatrix.set(vMatrix);
+
+	for (var i = 0, n = this.renderPasses.length; i < n; ++i) {
+	    var renderPass = this.renderPasses[i];
+	    if (renderPass.transparency) {
+		this.shaderSurface.uniforms.uTransparencyPhase.set(true);
+		gl.depthMask(false);
+		gl.enable(gl.BLEND);
+		// pre-multiplied alpha
+		gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+	    } else {
+		this.shaderSurface.uniforms.uTransparencyPhase.set(false);
+		gl.enable(gl.DEPTH_TEST);
+		gl.depthMask(true);
+		gl.depthFunc(gl.LESS);
+		gl.disable(gl.BLEND);
+	    }
+
+	    this.platform.draw(gl, program, renderPass);
+	    for (var j = 0, m = this.models.length; j < m; ++j) {
+		this.models[j].draw(gl, program, renderPass);
+	    }
+	}
     }
 });
