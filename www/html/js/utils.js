@@ -22,7 +22,7 @@ utils.debug = 0;
 utils.assertThrow = function(condition, message, log) {
     if (!condition) {
 	if (log) {
-	    console.log.apply(console, log);
+	    console.error("assertion failed: ", message, log);
 	}
 	throw new Error(message);
     }
@@ -44,6 +44,90 @@ utils.merge = function(obj, props) {
         obj[name] = props[name];
     }
     return obj;
+};
+
+/**
+ * Parse values from an object.
+ * specs = {
+ *   name: {
+ *     type: "number" | "string" | "boolean" | "object" | "function",
+ *     isA: <prototype>,
+ *     required: <boolean>,
+ *     defValue: <value>,
+ *   },
+ *   ...
+ * }
+ * @param {object} spec specification of the object properties to extract
+ * @param {object} obj the object to parse
+ * @param {object} results the optional object to receive the values
+ * @return true if results is modified
+ */
+utils.parse = function(specs, obj, results) {
+    utils.assert && utils.assert(
+        obj != undefined && typeof obj == 'object',
+        "expected an object, but got undefined"
+    );
+
+    var modified = false;
+    for (var name in specs) {
+        var spec = specs[name];
+        var value = obj[name];
+        if (value === undefined) {
+            utils.assert && utils.assert(
+                !spec.required,
+                "property " + name + " is required",
+                [specs, obj, name]
+            );
+            if (results) {
+                if (spec.keep && results[name] !== undefined) {
+                    /* keep existing value */
+                } else if (spec.defValue !== undefined) {
+                    /* use default value */
+                    if (results[name] != spec.defValue) {
+                        results[name] = spec.defValue;
+                        modified = true;
+                    }
+                } else {
+                    /* clear value */
+                    if (results[name] !== undefined) {
+                        results[name] = undefined;
+                        modified = true;
+                    }
+                }
+            }
+            continue;
+        }
+        var expectedType = spec.type;
+        if (expectedType) {
+            var actualType = typeof value;
+            if (actualType == 'object' && typeof expectedType == 'object') {
+                utils.assert && utils.assert(
+                    utils.isA(value, expectedType),
+                    "property " + name + " class is invalid",
+                    [specs, obj, name, value]
+                );
+            } else if (actualType == 'number' && expectedType == 'int') {
+                utils.assert && utils.assert(
+                    Math.floor(value) == value,
+                    "property " + name + " is " + actualType + " but expected " + expectedType,
+                    [specs, obj, name, value]
+                );
+            } else {
+                utils.assert && utils.assert(
+                    actualType == expectedType,
+                    "property " + name + " is " + actualType + " but expected " + expectedType,
+                    [specs, obj, name, value]
+                );
+            }
+        }
+        if (results) {
+            if (results[name] != value) {
+                results[name] = value;
+                modified = true;
+            }
+        }
+    }
+    return modified;
 };
 
 /// @return true if the object is an instance of the prototype
@@ -149,6 +233,58 @@ utils.arrayRemove = function(ary, el) {
 };
 
 /**
+ * Like Array.reduce except that an optional offset, stride, and count
+ * select the subset of the array to process.
+ * @param ary the array to reduce
+ * @param callback the callback invoked for each element
+ * @param offset the index of the first element to process
+ * @param stride the offset to subsequent elements to process
+ * @param count the number of elements to process
+ */
+utils.arrayReduce = function(ary, callback, initialValue, offset, stride, count) {
+    if (offset == undefined) {
+        offset = 0;
+    }
+    if (stride == undefined) {
+        stride = 1;
+    }
+    if (count != undefined) {
+        if (initialValue == undefined) {
+            initialValue = ary[offset];
+            offset += stride;
+            --count;
+        }
+        for (var i = 0; i < count; ++i) {
+            initialValue = callback(initialValue, ary[offset]);
+            offset += stride;
+        }
+    } else {
+        if (initialValue == undefined) {
+            initialValue = ary[offset];
+            offset += stride;
+        }
+        for (var i = offset, n = ary.length; i < n; i += stride) {
+            initialValue = callback(initialValue, ary[i]);
+        }
+    }
+    return initialValue;
+};
+
+/**
+ * Get the maximum value in the array.
+ */
+utils.arrayMax = function(ary, offset, stride, count) {
+    return utils.arrayReduce(ary, Math.max, undefined, offset, stride, count);
+};
+
+/**
+ * Get the minimum value in the array.
+ */
+utils.arrayMin = function(ary, offset, stride, count) {
+    return utils.arrayReduce(ary, Math.min, undefined, offset, stride, count);
+};
+
+/**
  * Unpack [[u, v], ...] into [u, v, ...].
  */
 utils.arrayUnpack2f = function(vec) {
@@ -184,11 +320,11 @@ utils.arrayUnpack3f = function(vec) {
  */
 utils.boundingBox = function(coords) {
     var xmin = coords[0];
-    var xmax = coords[0];
+    var xmax = xmin;
     var ymin = coords[1];
-    var ymax = coords[1];
+    var ymax = ymin;
     var zmin = coords[2];
-    var zmax = coords[2];
+    var zmax = zmin;
 
     var i = 3, n = coords.length;
     while (i < n) {
@@ -403,6 +539,29 @@ utils.EMA = utils.extend(utils.Object, {
 	}
 	this.ema = ema;
 	this.n = n + 1;
+    },
+
+    start: function() {
+        var start = self.performance.now();
+        this.timer = start;
+        return start;
+    },
+    elapsed: function() {
+        var start = this.timer;
+        if (start != null) {
+            return 0;
+        }
+        var now = self.performance.now();
+        return now - start;
+    },
+    stop: function() {
+        var start = this.timer;
+        var end = self.performance.now();
+        this.timer = end;
+        if (start != null) {
+            this.update(end - start);
+        }
+        return end;
     }
 });
 
@@ -1180,7 +1339,11 @@ utils.AssetImage = utils.extend(utils.Asset, {
 
     cleanup: function() {
 	utils.Asset.cleanup.call(this);
-	this.image = null;
+        if (this.image) {
+            this.image.onload = null;
+            this.image.onerror = null;
+	    this.image = null;
+        }
     },
 
     load: function() {
