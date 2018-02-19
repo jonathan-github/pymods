@@ -6,6 +6,269 @@ if (!ModifierLibrary) {
 /// spline interpolation function used by the modifiers
 var spline_tcb = utils.spline_tcb;
 
+/// linear interpolation between two vec3 values
+utils.vec3_lerp = function(out, a, b, t) {
+    // lerp = a * (1 - t) + b * t
+    // lerp = a - at + bt
+    // lerp = a + t (b - a)
+    return a + t * (b - a);
+};
+
+/// normalized linear interpolation between two quarternion values
+utils.quat_nlerp = function(out, a, b, t) {
+    quat.lerp(out, a, b, t);
+    quat.normalize(out);
+};
+                 
+/**
+ * Manage the static information for each modifier id.
+ * A modifier id represents either a scalar or a bone/property/channel.
+ * Type objects are associated with the ids to handle
+ * interpolation and aggregation of modifier values.
+ *
+ * <modifierId> = <scalarId> | <channelId>
+ *
+ * <scalarId> = {
+ *   key: <integer>,
+ *   id: <string>	// name
+ * }
+ *
+ * <channelId> = {
+ *   key: <integer>,
+ *   id: <string>,	// bone/property/channel
+ *   type: <channelType>,
+ *   bone: <boneId>,
+ *   property: <propertyId>
+ * }
+ *
+ * <boneId> = {
+ *   key: <integer>,
+ *   id: <string>,	// bone
+ *   name: <string>,
+ *   properties: {
+ *     <propertyId>.type.name: <propertyId>,
+ *     ...
+ *   }
+ * },
+ *
+ * <propertyId> = {
+ *   key: <integer>,
+ *   id: <string>,	// bone/property
+ *   type: <propertyType>,
+ *   bone: <boneId>,
+ *   channels: {
+ *     <channelId>.type.name: <channelId>,
+ *     ...
+ *   }
+ * }
+ *
+ * <propertyType> = {
+ *   name: <name>, 
+ *   size: <integer>,
+ *   // TBD: need rotation order when converting to/from quat
+ *   quarternion: <boolean>, // TBD: valueIn(quat, vec3), valueOut(vec3, quat)?
+ *   interpolate: <function(out, a, b, t)>,
+ *   aggregate: <function(out, a, b)>,
+ *   initValue: <vec>
+ * }
+ *
+ * <channelType> = {
+ *   name: <string>,
+ *   index: <integer>
+ * }
+ */
+utils.ModifierDict = {
+    /// list of bone properties
+    BONE_PROPERTY_LIST: [
+        { name: 'center_point',
+          size: 3,
+          interpolate: vec3.lerp,
+          aggregate: vec3.add,
+          initValue: [0,0,0] },
+        { name: 'end_point',
+          size: 3,
+          interpolate: vec3.lerp,
+          aggregate: vec3.add,
+          initValue: [0,0,0] },
+        { name: 'orientation',
+          size: 3,
+          quarternion: true,
+          interpolate: utils.quat_nlerp,
+          aggregate: quat.add,
+          initValue: [0,0,0] },
+        { name: 'rotation',
+          size: 3,
+          quarternion: true,
+          interpolate: utils.quat_nlerp,
+          aggregate: quat.add,
+          initValue: [0,0,0] },
+        { name: 'translation',
+          size: 3,
+          interpolate: vec3.lerp,
+          aggregate: quat.add,
+          initValue: [0,0,0] },
+        { name: 'scale',
+          size: 4,
+          interpolate: vec4.lerp,
+          aggregate: vec4.multiply,
+          initValue: [1,1,1,1] }
+    ],
+
+    /// list of bone property channel names
+    BONE_CHANNEL_LIST: [
+        { name: 'x', offset: 0 },
+        { name: 'y', offset: 1 },
+        { name: 'z', offset: 2 },
+        { name: 'general', offset: 3 }
+    ],
+
+    /// list of all registered modifiers
+    all: [],
+
+    /// map of registered modifiers indexed by modifier id
+    idMap: {},
+
+    /// map of registered bones indexed by bone id
+    boneMap: {},
+
+    /// map of registered bone properties indexed by property id
+    propertyMap: {},
+
+    /// initialize the dictionary
+    init: function() {
+        var props = this.BONE_PROPERTY_LIST;
+        var numChannels = 0;
+        var propMap = {};
+        for (var i = 0, n = props.length; i < n; ++i) {
+            var prop = props[i];
+            propMap[prop.name] = prop;
+            numChannels += prop.size;
+            if (prop.quarternion) {
+                ++numChannels;
+            }
+        }
+        this.BONE_PROPERTIES = propMap;
+        this.BONE_NUM_CHANNELS = numChannels;
+
+        var channelMap = {};
+        var channels = this.BONE_CHANNEL_LIST;
+        for (var i = 0, n = channels.length; i < n; ++i) {
+            var channel = channels[i];
+            channelMap[channel.name] = channel;
+        }
+        this.BONE_CHANNELS = channelMap;
+    },
+
+    /// get the modifier info for id
+    idGet: function(id) {
+        var mod = this.idMap[id];
+        if (mod != undefined) {
+            return mod;
+        }
+
+	if (id.indexOf('/') >= 0) {
+	    /* bone/property/channel */
+            var parts = id.split('/');
+            utils.assert && utils.assert(
+                parts.length == 3,
+                "invalid bone modifier: " + id
+            );
+
+            var boneId = parts[0];
+            var prop = parts[1];
+            var channel = parts[2];
+            var propType = this.BONE_PROPERTIES[prop];
+            utils.assert && utils.assert(
+                propType != undefined,
+                "invalid bone property: " + id
+            );
+            var chanType = this.BONE_CHANNELS[channel];
+            utils.assert && utils.assert(
+                chanType != undefined && chanType.offset < propType.size,
+                "invalid bone property channel: " + id
+            );
+            var bone = this.boneGet(boneId);
+            return bone.properties[prop].channels[channel];
+	}
+
+        mod = {
+            key: this.all.length,
+            id: id
+        };
+        this.all.push(mod);
+        this.idMap[id] = mod;
+        return mod;
+    },
+
+    boneGet: function(id) {
+        var bone = this.boneMap[id];
+        if (bone != undefined) {
+            return bone;
+        }
+        bone = {
+            key: this.all.length,
+            id: id,
+            properties: {}
+        };
+        this.all.push(bone);
+        this.boneMap[id] = bone;
+
+        var props = this.BONE_PROPERTY_LIST;
+        var channels = this.BONE_CHANNEL_LIST;
+        for (var i = 0, n = props.length; i < n; ++i) {
+            var propType = props[i];
+            var prop = {
+                key: this.all.length,
+                id: id + '/' + propType.name,
+                type: propType,
+                bone: bone,
+                channels: {}
+            };
+            this.all.push(prop);
+            this.propertyMap[prop.id] = prop;
+            bone.properties[propType.name] = prop;
+            for (var j = 0, m = propType.size; j < m; ++j) {
+                var chanType = channels[j];
+                var chan = {
+                    key: this.all.length,
+                    id: prop.id + '/' + chanType.name,
+                    type: chanType,
+                    bone: bone,
+                    property: prop
+                };
+                this.all.push(chan);
+                this.idMap[chan.id] = chan;
+                prop.channels[chanType.name] = chan;
+            }
+        }
+        return bone;
+    },
+
+    propertyGet: function(id) {
+        var prop = this.propertyMap[id];
+        if (prop != undefined) {
+            return prop;
+        }
+
+        /* create the property */
+        var parts = id.split('/');
+        utils.assert && utils.assert(
+            parts.length == 2,
+            "invalid bone property: " + id
+        );
+        var boneId = parts[0];
+        var name = parts[1];
+        var propType = this.BONE_PROPERTIES[name];
+        utils.assert && utils.assert(
+            propType != undefined,
+            "invalid bone property: " + id
+        );
+        var bone = this.boneGet(boneId);
+        return bone.properties[name];
+    }
+};
+utils.ModifierDict.init();
+
 /**
  * Modifier index and dependency graph.
  */
