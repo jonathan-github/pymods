@@ -145,7 +145,7 @@ GL.MeshDqs = utils.extend(utils.Object, {
 
         // unpack the vertices
         this.coords = utils.arrayUnpack3f(mesh.vertices);
-        this.coordsBase = new Float32Array(this.coords);
+        this.coordsInit = new Float32Array(this.coords);
 
         /*
          * aCoord attribute for the vertex's pre-transformed coordinates
@@ -327,7 +327,6 @@ GL.MeshDqs = utils.extend(utils.Object, {
 
     initBone: function(bone, parent) {
         bone.parent = parent;
-        bone.m = mat4.create();
         this.bones[bone.index] = bone;
         this.boneMap[bone.id] = bone;
         if (bone.alias) {
@@ -626,13 +625,13 @@ GL.MeshDqs = utils.extend(utils.Object, {
 
     animate: function(sampler, t) {
         this.controlBuf.set(this.controlInitBuf);
-        this.coords.set(this.coordsBase);
+        this.coords.set(this.coordsInit);
         sampler.output(t);
         var bones = this.bones;
         for (var i = 0, n = bones.length; i < n; ++i) {
             this.boneTransformLocal(bones[i]);
         }
-	this.boneTransformGlobal(this.config.mesh.figure);
+        this.boneTransformGlobal(this.config.mesh.figure);
         this.uBones.setData(this.uBonesUpdate);
         this.aCoord.setData(this.aCoordUpdate);
     },
@@ -663,10 +662,10 @@ GL.MeshDqs = utils.extend(utils.Object, {
         var dq = bone.dq;
         if (bone.parent) {
             dquat.multiply(dq, bone.parent.dq, bone.ldq);
-	} else {
+            dquat.normalize(dq, dq);
+        } else {
             dquat.copy(dq, bone.ldq);
         }
-        dquat.normalize(dq, dq);
 
 	var children = bone.children;
 	if (children) {

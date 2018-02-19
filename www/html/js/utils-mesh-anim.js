@@ -187,7 +187,7 @@ utils.KeyFrameQuatSampler = utils.extend(utils.KeyFrameSampler, {
         //quat.slerp(q, a, b, s);
         quat.lerp(q, a, b, s);
         quat.normalize(q, q);
-        return this.q;
+        return q;
     },
 
     equals: quat.equals
