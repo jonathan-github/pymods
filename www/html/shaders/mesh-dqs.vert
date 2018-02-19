@@ -85,6 +85,7 @@ void main() {
 	r *= l;
 	d *= l;
 
+#ifdef USE_MATRIX
 	/* convert dquat to mat4 */
 	float x0 = r.x, y0 = r.y, z0 = r.z, w0 = r.w;
 	float xe = d.x, ye = d.y, ze = d.z, we = d.w;
@@ -117,4 +118,10 @@ void main() {
 	vec4 pos = m * vec4(aCoord, 1.0);
 	vCoord = pos.xyz;
 	gl_Position = pos;
+#else
+	vCoord = aCoord +
+		2.0 * cross(r.xyz, cross(r.xyz, aCoord) + r.w * aCoord) +
+		2.0 * (r.w * d.xyz - d.w * r.xyz + cross(r.xyz, d.xyz));
+	gl_Position = vec4(vCoord, 1.0);
+#endif /* USE_MATRIX */
 }
