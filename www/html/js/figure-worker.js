@@ -1,9 +1,8 @@
 importScripts(
     "../lib/js/gl-matrix-min.js",
+    "dquat.js",
     "utils.js",
     "utils-mesh.js",
-    "dquat.js",
-    "dquat-test.js",
     "modifiers.js"
 );
 

@@ -419,10 +419,7 @@ var App = utils.extend(utils.WebVR, {
 	this.poseReverse = false;
 
 	var model = Assets.model;
-	this.preset = model.preset;
-        if (!this.preset) {
-            this.preset = {};
-        }
+	this.preset = model.preset || {};
 	assets.figure = utils.AssetFigure.create({
 	    url: model.figure,
             remap: model.remap
@@ -443,19 +440,11 @@ var App = utils.extend(utils.WebVR, {
         if (Assets.wearables) {
             for (var i = 0, n = Assets.wearables.length; i < n; ++i) {
                 var wearable = Assets.wearables[i];
-                var name = wearable.name;
-                if (name) {
-                    wearable.key = name;
-	            assets[name] = utils.AssetFigure.create({
-	                name: name
-	            });
-                } else {
-                    var url = wearable.url;
-                    wearable.key = url;
-	            assets[url] = utils.AssetFigure.create({
-	                url: url
-	            });
-                }
+                var url = wearable.url;
+	        assets[url] = utils.AssetFigure.create({
+	            url: url,
+                    remap: wearable.remap
+	        });
                 var script = wearable.script;
                 if (script) {
 	            assets[script] = utils.AssetScript.create({
@@ -500,18 +489,12 @@ var App = utils.extend(utils.WebVR, {
 	    this.figure = this.loader.cache.figure.get(library);
             this.figure.preset = this.preset;
 	}
-	var items = [];
-	if (this.loader.cache.hair) {
-	    this.hair = this.loader.cache.hair.get(library);
-	    items.push(this.hair);
-	}
         var wearables = [];
         if (Assets.wearables) {
             for (var i = 0, n = Assets.wearables.length; i < n; ++i) {
-                var key = Assets.wearables[i].key;
-                if (this.loader.cache[key]) {
-                    var asset = this.loader.cache[key].get(library);
-                    items.push(asset);
+                var url = Assets.wearables[i].url;
+                if (this.loader.cache[url]) {
+                    var asset = this.loader.cache[url].get(library);
                     wearables.push(asset);
                 }
             }
@@ -619,9 +602,10 @@ var App = utils.extend(utils.WebVR, {
 	this.shaderSurface.uniforms.uCutoutThreshold.set(0.8);
 	this.shaderSurface.uniforms.uTransparencyPhase.set(false);
 
-	if (this.hair) {
+        for (var i = 0, n = wearables.length; i < n; ++i) {
+            var wearable = wearables[i];
             // TBD: need per-model uniforms
-            switch (this.hair.figure.id) {
+            switch (wearable.figure.id) {
             case 'aprilyshVossHairG8F_80330':
 	        this.shaderSurface.uniforms.uCutoutThreshold.set(0.55);
                 break;
@@ -646,7 +630,7 @@ var App = utils.extend(utils.WebVR, {
 		models: {
 		    wireframe: wireframe,
 		    figure: this.figure,
-		    items: items
+		    items: wearables
 		}
 	    });
 	}	
@@ -666,17 +650,16 @@ var App = utils.extend(utils.WebVR, {
 		library,
 		wireframe
 	    );
+            if (false) {
+                // test octree and cindex
+                var octree = utils.Octree.create(this.figure.coords);
+                false && octree.load(this.figure.coords);
+                octree.validate();
+                var cindex = utils.CoordIndex.create(this.figure.coords);
+                false && cindex.load(this.figure.coords);
+                cindex.validate();
+            }
 	    this.controls = this.figure.controls;
-	    if (this.hair) {
-		this.hair = utils.Surface.create(
-		    gl,
-		    this.hair,
-		    library,
-		    wireframe
-		);
-		this.models.push(this.hair);
-		this.figure.followers.push(this.hair);
-	    }
             for (var i = 0, n = wearables.length; i < n; ++i) {
 		var wearable = utils.Surface.create(
 		    gl,
