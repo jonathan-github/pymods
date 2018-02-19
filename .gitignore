@@ -7,3 +7,6 @@ __pycache__
 # exclude external content
 www/html/icons/basic-application
 www/html/lib
+
+# exclude temporary directories
+tmp
