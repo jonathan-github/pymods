@@ -38,8 +38,17 @@ import dson.utils
         "inherits_scale": bool,
         "scale": [x, y, z],
         "general_scale": float,
-        "weights": [[vertex_index, weight], ...]
+        "weights": [[vertex_index, weight], ...] // obsolete
         "children": [bone, ...],
+    },
+    "vertex_weights": {
+        // offset = index[vertex_index * 2]
+        // count  = index[vertex_index * 2 + 1]
+        // for i in range(count):
+        //  bone_index = weights[(offset + i) * 2]
+        //  weight     = weights[(offset + i) * 2 + 1]
+        "index": [offset, count, ...],
+        "weights": [bone_index, weight, ...]
     }
 }
 library = {
@@ -75,6 +84,16 @@ def dumpNodeHier(node, indent=0):
     for child in node.children:
         dumpNodeHier(child, indent1)
         pass
+    pass
+
+class Counter:
+    def __init__(self, start=0):
+        self.counter = start
+        pass
+    def get(self):
+        counter = self.counter
+        self.counter += 1
+        return counter
     pass
 
 PointUnpackOrder = ('x', 'y', 'z')
@@ -134,7 +153,7 @@ BoneExportDefs = [
     ExportDef('general_scale', unpackers=('channel', 'point'))
 ]
 
-def boneExport(bone, nodeWeights=None):
+def boneExport(bone, bi, nodeWeights=None, vertexWeights=None):
     if not bone.isA((dson.types.Figure, dson.types.Bone)):
         return None
 
@@ -146,23 +165,27 @@ def boneExport(bone, nodeWeights=None):
         ))
         pass
     #assert bone.propGet('id') == bone.propGet('name')
-    rec = {}
+    rec = {'index': bi.get()}
     for expDef in BoneExportDefs:
         expDef.load(bone, rec)
         pass
     id = bone.propGet('url', 'id')
     if rec['id'] != id:
         rec['alias'] = id
+        logger.warn("bone id {} alias {}".format(rec['id'], id))
         pass
     if nodeWeights:
         values = nodeWeights.get(bone.propGet('name'))
         if values:
             rec['node_weights'] = values
+            if vertexWeights:
+                vertexWeights.add(rec['index'], values)
+                pass
             pass
         pass
     children = []
     for child in bone.children:
-        child = boneExport(child, nodeWeights)
+        child = boneExport(child, bi, nodeWeights, vertexWeights)
         if child:
             children.append(child)
             pass
@@ -171,6 +194,62 @@ def boneExport(bone, nodeWeights=None):
         rec['children'] = children
         pass
     return rec
+
+class VertexWeights:
+    def __init__(self):
+        self.perVertex = {}
+        pass
+
+    def add(self, bi, weights):
+        for vi, weight in weights:
+            pv = self.perVertex.get(vi)
+            if pv is None:
+                pv = self.perVertex[vi] = []
+                pass
+            pv.append((bi, weight))
+            pass
+        pass
+
+    def export(self):
+        index = []
+        weights = []
+        blocks = {}
+        offset = 0
+
+        total = 0
+        needed = 0
+        for vi in sorted(self.perVertex.keys()):
+            pv = self.perVertex[vi]
+            total += len(pv)
+            block = []
+            for bi, weight in sorted(pv):
+                block.append((bi, weight))
+                pass
+            block = tuple(block)
+            if block in blocks:
+                # re-use block
+                bOffset, count = blocks[block]
+                pass
+            else:
+                # new block
+                bOffset = offset
+                count = len(pv)
+                blocks[block] = (bOffset, count)
+                offset += count
+                needed += count
+                for bi, weight in block:
+                    weights.append(bi)
+                    weights.append(weight)
+                    pass
+                pass
+            index.append(bOffset)
+            index.append(count)
+            pass
+        logger.info("weight map compressed to {} out of {} entries".format(
+            needed, total
+        ))
+        return {'index': index, 'weights': weights}
+    pass
 
 class ObjectSet:
     def __init__(self):
@@ -343,7 +422,7 @@ class LibraryExporter:
             }
             uvSet = self.uvSetAdd(material.propFind('uv_set'))
             if uvSet:
-                logger.info(" uv_set = {}".format(uvSet['obj']))
+                logger.debug(" uv_set = {}".format(uvSet['obj']))
                 rec['uvSet'] = uvSet
                 rec['json']['uv_set'] = uvSet['index']
                 pass
@@ -362,7 +441,7 @@ class LibraryExporter:
                     diffuseRec['image'] = image['index']
                     pass
                 if diffuseRec:
-                    logger.info(" diffuse = {}".format(diffuseRec))
+                    logger.debug(" diffuse = {}".format(diffuseRec))
                     rec['json']['diffuse'] = diffuseRec
                     pass
                 pass
@@ -378,7 +457,7 @@ class LibraryExporter:
                     cutoutRec['image'] = image['index']
                     pass
                 if cutoutRec:
-                    logger.info(" cutout = {}".format(cutoutRec))
+                    logger.debug(" cutout = {}".format(cutoutRec))
                     rec['json']['cutout'] = cutoutRec
                     pass
                 pass
@@ -394,7 +473,7 @@ class LibraryExporter:
                     normalMapRec['image'] = image['index']
                     pass
                 if normalMapRec:
-                    logger.info(" normalMap = {}".format(normalMapRec))
+                    logger.debug(" normalMap = {}".format(normalMapRec))
                     rec['json']['normalMap'] = normalMapRec
                     pass
                 pass
@@ -410,7 +489,7 @@ class LibraryExporter:
                     specularMapRec['image'] = image['index']
                     pass
                 if specularMapRec:
-                    logger.info(" specularMap = {}".format(specularMapRec))
+                    logger.debug(" specularMap = {}".format(specularMapRec))
                     rec['json']['specularMap'] = specularMapRec
                     pass
                 pass
@@ -428,7 +507,7 @@ class LibraryExporter:
                     bumpMapRec['image'] = image['index']
                     pass
                 if bumpMapRec:
-                    logger.info(" bumpMap = {}".format(bumpMapRec))
+                    logger.debug(" bumpMap = {}".format(bumpMapRec))
                     rec['json']['bumpMap'] = bumpMapRec
                     pass
                 pass
@@ -437,7 +516,7 @@ class LibraryExporter:
             if groups:
                 rec['json']['groups'] = groups
                 for group in groups:
-                    logger.info(" group = {}".format(group))
+                    logger.debug(" group = {}".format(group))
                     assert group not in self.materialGroups
                     self.materialGroups[group] = rec
                     pass
@@ -577,6 +656,8 @@ class FigureExporter:
                 group['uvs'] = uvs
                 pass
             pass
+        boneCounter = Counter()
+        vertexWeights = VertexWeights()
         data = {
             'name': self.library.baseName,
             'type': geometry.propGet('type'),
@@ -584,8 +665,17 @@ class FigureExporter:
             'polygons': polygons,
             'polygon_groups': polygonGroups,
             'material_groups': polygonMaterialGroups,
-            'figure': boneExport(figure, nodeWeights)
+            'figure': boneExport(figure, boneCounter, nodeWeights, vertexWeights)
         }
+        data['vertex_weights'] = vertexWeights.export()
         data.update(self.library.export())
+        logger.info("vertices: {}".format(len(data['vertices'])))
+        logger.info("polygons: {}".format(len(polygons)))
+        uv_sets = data.get('uv_sets')
+        if uv_sets:
+            for uv_set in uv_sets:
+                logger.info("uv_set[{}]: {}".format(uv_set['id'], len(uv_set['uvs'])))
+                pass
+            pass
         return data
     pass

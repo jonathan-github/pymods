@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import os
 import PIL.Image
@@ -7,6 +8,7 @@ import sys
 
 # Examples:
 # python .\exporters\figureExporter.py "Victoria 7.duf"
+# python .\exporters\figureExporter.py "Krayon Hair/Krayon Hair.duf"
 # python .\exporters\figureExporter.py "Hongyu/Hongyu's MiniDress for V7/HY MiniDress for V7.duf"
 
 # pymod modules
@@ -14,7 +16,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import dson.reader
 import exporters.figure
 
-# sub-directories to search
+# figure sub-directories
 INCLUDE_DIRS = [
     '/People/Genesis 3 Female/Characters',
     '/People/Genesis 3 Female/Hair',
@@ -32,7 +34,7 @@ parser.add_argument(
     'figures',
     metavar='FIGURE',
     type=str,
-    nargs='+',
+    nargs='*',
     help='a DAZ figure in DSON format (.duf)'
 )
 parser.add_argument(
@@ -65,6 +67,13 @@ parser.add_argument(
     default=False,
     help='overwrite output files'
 )
+parser.add_argument(
+    '-l',
+    dest='figureList',
+    metavar='FILE',
+    type=str,
+    help='list of figures to export'
+)
 args = parser.parse_args()
 if not os.path.isdir(args.outputDir):
     sys.exit("{}: output directory does not exist".format(args.outputDir))
@@ -79,6 +88,34 @@ if args.verbose:
     pass
 logging.basicConfig(**loggingConfig)
 logger = logging.getLogger(__name__)
+
+if args.includes is None:
+    args.includes = []
+    pass
+if args.figures is None:
+    args.figures = []
+    pass
+if args.figureList:
+    with open(args.figureList, 'r') as fp:
+        data = json.load(fp)
+        pass
+    includes = data.get('includes')
+    if includes:
+        for incDir in includes:
+            if incDir not in args.includes:
+                args.includes.append(incDir)
+                pass
+            pass
+        pass
+    figures = data.get('figures')
+    if figures:
+        for fig in figures:
+            if fig not in args.figures:
+                args.figures.append(fig)
+                pass
+            pass
+        pass
+    pass
 
 def findUrl(url, dirs=None):
     cache = dson.reader.cache
