@@ -1,6 +1,10 @@
 var dquat = {
-    cache_q: [],
-    cache_v: [],
+    /// scratch variables
+    _q_0: quat.create(),
+    _q_1: quat.create(),
+    _q_2: quat.create(),
+    _v3_0: vec3.create(),
+    _m3_0: mat3.create(),
 
     q: function(i, init) {
 	var q = dquat.cache_q[i];
@@ -73,29 +77,14 @@ var dquat = {
 	var r = out[0], d = out[1];
 
 	var rtmp = dquat._q_0;
-	if (!rtmp) {
-	    rtmp = dquat._q_0 = quat.create();
-	}
 	quat.multiply(rtmp, ra, rb);
 
 	var dtmp1 = dquat._q_1;
-	if (!dtmp1) {
-	    dtmp1 = dquat._q_1 = quat.create();
-	}
 	var dtmp2 = dquat._q_2;
-	if (!dtmp2) {
-	    dtmp2 = dquat._q_2 = quat.create();
-	}
 	quat.multiply(dtmp1, ra, db);
 	quat.multiply(dtmp2, da, rb);
 	quat.add(d, dtmp1, dtmp2);
 	quat.copy(r, rtmp);
-
-	if (false) {
-	var tmp = quat.create();
-	quat.multiply(tmp, rb, da);
-	quat.add(d, d, tmp);
-	}
 	return out;
     },
 
@@ -111,9 +100,6 @@ var dquat = {
 
     fromMat4: function(out, m) {
 	var r = dquat._m3_0;
-	if (!r) {
-	    r = dquat._m3_0 = mat3.create();
-	}
 	mat3.fromMat4(r, m);
 
 	var qr = out[0], qd = out[1];
@@ -130,6 +116,10 @@ var dquat = {
 
     fromRotationTranslation: function(out, r, t) {
 	var qr = out[0], qd = out[1];
+        qr[0] = r[0];
+        qr[1] = r[1];
+        qr[2] = r[2];
+        qr[3] = r[3];
 	qd[0] = t[0];
 	qd[1] = t[1];
 	qd[2] = t[2];
@@ -138,20 +128,26 @@ var dquat = {
 	quat.scale(qd, qd, 1/2);
 	return out;
     },
+    fromTranslation: function(out, t) {
+	var qr = out[0], qd = out[1];
+        qr[0] = 0;
+        qr[1] = 0;
+        qr[2] = 0;
+        qr[3] = 1;
+	qd[0] = t[0] / 2;
+	qd[1] = t[1] / 2;
+	qd[2] = t[2] / 2;
+	qd[3] = 0;
+	return out;
+    },
 
     toMat4: function(out, q) {
 	var qr = q[0], qd = q[1];
 	var t = dquat._q_0;
-	if (!t) {
-	    t = dquat._q_0 = quat.create();
-	}
 	quat.conjugate(t, qr);
 	quat.multiply(t, qd, t);
 	quat.scale(t, t, 2);
 	var v = dquat._v3_0;
-	if (!v) {
-	    v = dquat._v3_0 = vec3.create();
-	}
 	vec3.set(v, t[0], t[1], t[2]);
 	mat4.fromRotationTranslation(out, qr, v);
 	return out;
@@ -164,9 +160,6 @@ var dquat = {
 
     toTranslation: function(out, q) {
 	var t = dquat._q_0;
-	if (!t) {
-	    t = dquat._q_0 = quat.create();
-	}
 	quat.conjugate(t, q[0]);
 	quat.multiply(t, q[1], t);
 	quat.scale(t, t, 2);
@@ -184,11 +177,13 @@ var dquat = {
 	var iNorm = 1 / dquat.length(q);
 
 	// c0 = b0 / ||b0||
-	var c0 = dquat.q(0, q[0]);
+        var c0 = dquat._q_0;
+        quat.copy(c0, q[0]);
 	quat.scale(c0, c0, iNorm);
 
 	// cE = bE / ||bE||
-	var cE = dquat.q(1, q[1]);
+	var cE = dquat._q_1;
+        quat.copy(cE, q[1]);
 	quat.scale(cE, cE, iNorm);
 
 	dquat.debug && console.log(

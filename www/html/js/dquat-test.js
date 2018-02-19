@@ -120,7 +120,7 @@ utils.test.dquat = function() {
     dquat.toMat4(tmp, q);
     utils.test.mat4Eq(mr, tmp);
 
-    // test rotation accesor
+    // test rotation accessor
     console.log("testing rotation accessor");
     var r = mat3.create();
     mat3.fromMat4(r, mr);
@@ -145,7 +145,7 @@ utils.test.dquat = function() {
     dquat.toMat4(tmp, q);
     utils.test.mat4Eq(mt, tmp);
 
-    // test translation accesor
+    // test translation accessor
     console.log("testing translation accessor");
     var t = vec3.fromValues(mt[12], mt[13], mt[14]);
     console.log("t =", vec3.str(t));
