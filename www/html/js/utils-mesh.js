@@ -950,11 +950,11 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 	}
     },
     bufferTransfer: function(buffer, state, transferList) {
-	this.arrayTransfer(buffer, state, 'coords', transferList);
-	this.arrayTransfer(buffer, state, 'normals', transferList);
-	this.arrayTransfer(buffer, state, 'tangents', transferList);
+	this.arrayTransfer(buffer, state, 'coords', 'coordsBuf', transferList);
+	this.arrayTransfer(buffer, state, 'normals', 'normalsBuf', transferList);
+	this.arrayTransfer(buffer, state, 'tangents', 'tangentsBuf', transferList);
     },
-    arrayTransfer: function(buffer, state, name, transferList) {
+    arrayTransfer: function(buffer, state, name, glName, transferList) {
 	var ary = buffer[name];
 	var aryNew = state[name];
 	state[name] = ary;
@@ -963,7 +963,7 @@ utils.MeshBuffers = utils.extend(utils.Object, {
 	    aryNew.length == ary.length) {
 	    transferList.push(ary.buffer);
 	    buffer[name] = aryNew;
-	    var glBuf = buffer[name + 'Buf'];
+	    var glBuf = buffer[glName];
 	    if (glBuf) {
 		glBuf.set(aryNew);
 	    }
@@ -1201,15 +1201,6 @@ utils.Surface = utils.extend(utils.Object, {
     applyBoneOffsets: false,
 
     init: function(gl, mesh, library, wireframe) {
-	this.tmp = {
-	    v0: vec3.create(),
-	    v1: vec3.create(),
-	    v2: vec3.create(),
-	    q0: dquat.create(),
-	    q1: dquat.create(),
-	    m0: mat4.create(),
-	    m1: mat4.create()
-	};
 	this.mesh = mesh;
 	this.wireframe = wireframe;
 	this.bonesInit(mesh.figure);
@@ -1297,9 +1288,25 @@ utils.Surface = utils.extend(utils.Object, {
 	return g1 - g2;
     },
 
-    distance: function(a, b) {
+    /**
+     * Compute the cosine of the angle between a->b and a->c.
+     */
+    cosTheta: function(a, b, c) {
 	var vertices = this.mesh.vertices;
-	return vec3.distance(vertices[a], vertices[b]);
+        var av = vertices[a],
+            bv = vertices[b],
+            cv = vertices[c];
+        var abx = bv[0] - av[0],
+            aby = bv[1] - av[1],
+            abz = bv[2] - av[2];
+        var acx = cv[0] - av[0],
+            acy = cv[1] - av[1],
+            acz = cv[2] - av[2];
+
+        var dot = abx * acx + aby * acy + abz * acz;
+        var ab = Math.sqrt(abx * abx + aby * aby + abz * abz);
+        var ac = Math.sqrt(acx * acx + acy * acy + acz * acz);
+        return dot / (ab * ac);
     },
 
     BONE_FILTER: {
@@ -1342,8 +1349,7 @@ utils.Surface = utils.extend(utils.Object, {
 
     /**
      * Update the vertex and uv index lists for the specified polygon.
-     * If the polygon is a quad, it is split into two triangles along the
-     * shortest diagonal.
+     * If the polygon is a quad, split it into two triangles.
      */
     polyInit: function(gl, poly, indices, uvs, uv_poly, uv_indices) {
 	var l = poly.length;
@@ -1418,16 +1424,17 @@ if (false) {
 	} else {
 	    /* render as filled triangles */
 	    if (l == 4) {
-		// split quad into tris along the shortest diagonal
-if (false) {
-                // use model coordinates for the diagonal
+		/*
+                 * split quad into tris using the diagonal with the largest angle
+                 * @note same as chooising the smallest cos(theta)
+                 */
 		var a = poly[0],
 		    b = poly[1],
 		    c = poly[2],
 		    d = poly[3];
-		var d1 = this.distance(a, c);
-		var d2 = this.distance(b, d);
-		if (d1 <= d2) {
+                var ct1 = this.cosTheta(a, b, c);
+                var ct2 = this.cosTheta(b, c, a);
+		if (ct1 <= ct2) {
 		    indices.push(
 			a, b, c,
 			c, d, a
@@ -1446,34 +1453,6 @@ if (false) {
 			uv_poly[3], uv_poly[0], uv_poly[1]
 		    );
 		}
-} else {
-                // use texture coordinates for the diagonal
-		var a = uv_poly[0],
-		    b = uv_poly[1],
-		    c = uv_poly[2],
-		    d = uv_poly[3];
-		var d1 = vec2.distance(uvs[a], uvs[c]);
-		var d2 = vec2.distance(uvs[b], uvs[d]);
-		if (d1 <= d2) {
-		    indices.push(
-			poly[0], poly[1], poly[2],
-			poly[2], poly[3], poly[0]
-		    );
-		    uv_indices.push(
-                        a, b, c,
-                        c, d, a
-		    );
-		} else {
-		    indices.push(
-			poly[1], poly[2], poly[3],
-			poly[3], poly[0], poly[1]
-		    );
-		    uv_indices.push(
-                        b, c, d,
-                        d, a, b
-		    );
-		}
-}
 		n = 6;
 	    } else if (l == 3) {
 		utils.append(indices, poly);
@@ -1618,11 +1597,16 @@ if (false) {
         }
     },
 
+    tmpTexScales: {
+        v0: vec3.create(),
+        v1: vec3.create()
+    },
+
     /**
      * Update the per-vertex texture scaling.
      */
     texScalesUpdate: function(coords) {
-        var va = this.tmp.v0, vb = this.tmp.v1;
+        var va = this.tmpTexScales.v0, vb = this.tmpTexScales.v1;
 	var materials = this.mesh.materials;
 	for (var i = 0, n = materials.length; i < n; ++i) {
 	    var material = materials[i];
@@ -1953,6 +1937,14 @@ if (true) {
 	}
     },
 
+    tmpBone: {
+        v0: vec3.create(),
+        v1: vec3.create(),
+
+        // debugging
+	m0: mat4.create()
+    },
+
     boneTransformLocal: function(bone, transform) {
 	var cache = bone.cache;
 	if (!cache) {
@@ -1960,7 +1952,7 @@ if (true) {
 	}
 	cache.transform = transform;
 
-	var tmpVec = this.tmp.v0;
+	var tmpVec = this.tmpBone.v0;
 
 	var cp = cache.center_point;
 	if (!cp) {
@@ -2003,7 +1995,7 @@ if (true) {
 
 	var order = bone.rotation_order;
 	vec3.copy(tmpVec, bone.orientation);
-	op = transform && transform.orientation;
+	var op = transform && transform.orientation;
 	if (op) {
 	    if (op.x != undefined) tmpVec[0] += op.x;
 	    if (op.y != undefined) tmpVec[1] += op.y;
@@ -2014,19 +2006,12 @@ if (true) {
 	mat4.invert(o_inv, o);
 
 	vec3.copy(cp, bone.center_point);
-	var op = transform && transform.center_point;
+	op = transform && transform.center_point;
 	if (op) {
 	    vec3.set(co, op.x || 0, op.y || 0, op.z || 0);
+	    vec3.add(cp, cp, co);
 	} else {
 	    vec3.set(co, 0,0,0);
-	}
-	if (true) {
-	    /* add  offset */
-	    vec3.add(cp, cp, co);
-	}
-	if (false) {
-	    /* subtract  offset */
-	    vec3.sub(cp, cp, co);
 	}
 
 	vec3.copy(ep, bone.end_point);
@@ -2103,15 +2088,16 @@ if (true) {
 		  ? cache.center_point
 		  : bone.center_point);
 
-	vec3.add(this.tmp.v0, cp, cache.translation);
-	mat4.fromTranslation(m, this.tmp.v0);
+        var tmpVec = this.tmpBone.v0;
+	vec3.add(tmpVec, cp, cache.translation);
+	mat4.fromTranslation(m, tmpVec);
 
 	mat4.multiply(m, m, cache.orientation);
 	mat4.multiply(m, m, cache.rotation);
 	mat4.multiply(m, m, cache.orientation_inv);
 
-	vec3.negate(this.tmp.v0, cp);
-	mat4.translate(m, m, this.tmp.v0);
+	vec3.negate(tmpVec, cp);
+	mat4.translate(m, m, tmpVec);
 
 	/* compute the scale/shear transform */
 	if (this.applyBoneOffsets) {
@@ -2200,6 +2186,10 @@ if (true) {
 	}
     },
 
+    tmpBoneDebug: {
+	m0: mat4.create()
+    },
+
     boneUpdate: function(bone) {
 	if (bone.dirty) {
 	    // mat4 -> dquat
@@ -2212,11 +2202,12 @@ if (true) {
 
 	    var bei = bone.bei;
 	    if (this.debug && bei != undefined) {
-		var cp = this.tmp.v0;
-		var ep = this.tmp.v1;
-		dquat.toMat4(this.tmp.m0, q);
-		vec3.transformMat4(cp, bone.center_point, this.tmp.m0);
-		vec3.transformMat4(ep, bone.end_point, this.tmp.m0);
+		var cp = this.tmpBone.v0;
+		var ep = this.tmpBone.v1;
+                var tmpM = this.tmpBoneDebug.m0;
+		dquat.toMat4(tmpM, q);
+		vec3.transformMat4(cp, bone.center_point, tmpM);
+		vec3.transformMat4(ep, bone.end_point, tmpM);
 		bei *= 3;
 		this.boneEdgeVerticesBuf[bei++] = cp[0];
 		this.boneEdgeVerticesBuf[bei++] = cp[1];
@@ -2225,12 +2216,12 @@ if (true) {
 		this.boneEdgeVerticesBuf[bei++] = ep[1];
 		this.boneEdgeVerticesBuf[bei++] = ep[2];
 
-		vec3.transformMat4(cp, bone.cache.center_point, this.tmp.m0);
+		vec3.transformMat4(cp, bone.cache.center_point, tmpM);
 		this.boneEdgeVerticesBuf[bei++] = cp[0];
 		this.boneEdgeVerticesBuf[bei++] = cp[1];
 		this.boneEdgeVerticesBuf[bei++] = cp[2];
 
-		vec3.transformMat4(ep, bone.cache.end_point, this.tmp.m0);
+		vec3.transformMat4(ep, bone.cache.end_point, tmpM);
 		this.boneEdgeVerticesBuf[bei++] = ep[0];
 		this.boneEdgeVerticesBuf[bei++] = ep[1];
 		this.boneEdgeVerticesBuf[bei++] = ep[2];
@@ -2253,6 +2244,12 @@ if (true) {
 	}
     },
 
+    tmpMesh: {
+        v0: vec3.create(),
+        v1: vec3.create(),
+        v2: vec3.create()
+    },
+
     meshUpdate: function() {
 	if (!this.dirty) {
 	    return;
@@ -2271,9 +2268,9 @@ if (true) {
 	var coords = this.coords;
 	var vertices = this.mesh.vertices;
 	var first = true;
-	var pt1 = this.tmp.v0;
-	var pt2 = this.tmp.v1;
-	var pt3 = this.tmp.v2;
+	var pt1 = this.tmpMesh.v0;
+	var pt2 = this.tmpMesh.v1;
+	var pt3 = this.tmpMesh.v2;
 	var morphs = this.morphs;
 	var autoFitMorphs = this.autoFitMorphs;
 	for (var i = 0, n = vertices.length; i < n; ++i) {
@@ -2302,9 +2299,9 @@ if (true) {
 		p = this.vertexUpdateDQS(pt3, weights, p, 'q');
 	    }
 	    var ci = i * 3;
-	    coords[ci++] = pt3[0];
-	    coords[ci++] = pt3[1];
-	    coords[ci++] = pt3[2];
+	    coords[ci++] = p[0];
+	    coords[ci++] = p[1];
+	    coords[ci++] = p[2];
 	}
 	var stats = {};
 	var ielapsed = self.performance.now() - istart;
@@ -2342,9 +2339,14 @@ if (true) {
 	}
     },
 
+    tmpLBS: {
+	m0: mat4.create(),
+	m1: mat4.create()
+    },
+
     vertexUpdateLBS: function(out, weights, p, prop) {
-	var m0 = this.tmp.m0;
-	var m1 = this.tmp.m1;
+	var m0 = this.tmpLBS.m0;
+	var m1 = this.tmpLBS.m1;
 	for (var i = 0, n = weights.length; i < n; ++i) {
 	    var vrec = weights[i];
 	    var mb = vrec[0][prop];
@@ -2362,27 +2364,30 @@ if (true) {
 	return out;
     },
 
-    vertexUpdateDQS: function(out, weights, p, prop) {
-	var q = this.tmp.q0;
-	var qblend = this.tmp.q1;
-	dquat.identity(qblend);
-	var q0;
-	for (var i = 0, n = weights.length; i < n; ++i) {
-	    var vrec = weights[i];
-	    var qb = vrec[0][prop];
-	    var weight = vrec[1];
+    tmpDQS: {
+        q0: dquat.create(),
+        q1: dquat.create(),
+	m0: mat4.create()
+    },
 
-	    if (i == 0) {
-		q0 = qb;
-		dquat.scale(qblend, qb, weight);
-	    } else {
-		var d = dquat.dot(q0, qb);
-		if (d < 0) {
-		    weight = -weight;
-		}
-		dquat.scale(q, qb, weight);
-		dquat.add(qblend, qblend, q);
+    vertexUpdateDQS: function(out, weights, p, prop) {
+	var q = this.tmpDQS.q0;
+	var qblend = this.tmpDQS.q1;
+
+        var vrec = weights[0];
+        var qb = vrec[0][prop];
+        var weight = vrec[1];
+        var q0 = qb;
+        dquat.scale(qblend, qb, weight);
+	for (var i = 1, n = weights.length; i < n; ++i) {
+	    vrec = weights[i];
+	    qb = vrec[0][prop];
+	    weight = vrec[1];
+            if (dquat.dot(q0, qb) < 0) {
+                weight = -weight;
 	    }
+            dquat.scale(q, qb, weight);
+            dquat.add(qblend, qblend, q);
 	}
 	dquat.normalize(qblend, qblend);
 
@@ -2393,7 +2398,7 @@ if (true) {
 	var t0 = 2 * (-we * x0 + xe * w0 - ye * z0 + ze * y0);
 	var t1 = 2 * (-we * y0 + xe * z0 + ye * w0 - ze * x0);
 	var t2 = 2 * (-we * z0 - xe * y0 + ye * x0 + ze * w0);
-	var m = this.tmp.m0;
+	var m = this.tmpDQS.m0;
 	// col0
 	m[0] = 1 - 2 * y0*y0 - 2 * z0*z0;
 	m[1] = 2 * x0 * y0 + 2 * w0 * z0;
@@ -2528,15 +2533,15 @@ utils.Octree = utils.extend(utils.Object, {
     },
 
     /**
-     * Load the array of coordinates into the octree.
-     * @param {[x0,y0,z0, ...]} coords the coords array
+     * Load the coordinates into the octree.
+     * @param {[x0,y0,z0,...]} coords the array of unpacked coordinates
      */
     load: function(coords) {
 	var start = self.performance.now();
 	var n = coords.length;
 	utils.assert && utils.assert(
 	    n > 0 && n % 3 == 0,
-	    "coordinate buffer length must be a multiple of three"
+	    "coordinates array length must be a multiple of three"
 	);
 	this.coords = coords;
 
@@ -2560,6 +2565,7 @@ utils.Octree = utils.extend(utils.Object, {
 	    return false;
 	}
 
+	var start = self.performance.now();
 	var valid = true;
 	var coords = this.coords;
 	var n = Math.floor(coords.length / 3);
@@ -2581,6 +2587,10 @@ utils.Octree = utils.extend(utils.Object, {
 		break;
 	    }
 	}
+	var elapsed = self.performance.now() - start;
+	utils.debug && console.log(
+	    "validated octree with " + n + " vertices in " + elapsed + " msec"
+	);
 	return valid;
     },
     validateNode: function(node) {
@@ -2861,6 +2871,306 @@ utils.Octree = utils.extend(utils.Object, {
 	var dy = yb - ya;
 	var dz = zb - za;
 	return dx*dx + dy*dy + dz*dz;
+    }
+});
+
+/**
+ * Index for a set of coordinates.
+ */
+utils.CoordIndex = utils.extend(utils.Object, {
+    /**
+     * Initialize the object.
+     * @param {[x0,y0,z0,...]} coords the array of unpacked coordinates
+     */
+    init: function(coords) {
+        this.load(coords);
+    },
+
+    /**
+     * Load the coordinates into the index.
+     */
+    load: function(coords) {
+	var start = self.performance.now();
+        var n = coords.length;
+        utils.assert && utils.assert(
+            n % 3 == 0,
+            "coordinates array length must be a multiple of three"
+        );
+        this.coords = coords;
+        
+        n = Math.floor(n / 3);
+        var xIndex = this.xIndex;
+        if (!xIndex || xIndex.length != n) {
+            xIndex = this.xIndex = new Array(n);
+        }
+        var yIndex = this.yIndex;
+        if (!yIndex || yIndex.length != n) {
+            yIndex = this.yIndex = new Array(n);
+        }
+        var zIndex = this.zIndex;
+        if (!zIndex || zIndex.length != n) {
+            zIndex = this.zIndex = new Array(n);
+        }
+        var j = 0, rec;
+        for (var i = 0; i < n; ++i) {
+            var x = coords[j++];
+            var y = coords[j++];
+            var z = coords[j++];
+            rec = xIndex[i];
+            if (!rec) {
+                xIndex[i] = [i, x];
+            } else {
+                rec[0] = i;
+                rec[1] = x;
+            }
+            rec = yIndex[i];
+            if (!rec) {
+                yIndex[i] = [i, y];
+            } else {
+                rec[0] = i;
+                rec[1] = y;
+            }
+            rec = zIndex[i];
+            if (!rec) {
+                zIndex[i] = [i, z];
+            } else {
+                rec[0] = i;
+                rec[1] = z;
+            }
+        }
+        xIndex.sort(this.indexSort);
+        yIndex.sort(this.indexSort);
+        zIndex.sort(this.indexSort);
+
+        var bbox = this.boundingBox;
+        if (!bbox) {
+            bbox = this.boundingBox = {};
+        }
+        var end = n - 1;
+        bbox.xmin = xIndex[0][1];
+        bbox.xmax = xIndex[end][1];
+        bbox.ymin = yIndex[0][1];
+        bbox.ymax = yIndex[end][1];
+        bbox.zmin = zIndex[0][1];
+        bbox.zmax = zIndex[end][1];
+	bbox.width = bbox.xmax - bbox.xmin;
+	bbox.height = bbox.ymax - bbox.ymin;
+	bbox.depth = bbox.zmax - bbox.zmin;
+	var elapsed = self.performance.now() - start;
+	utils.debug && console.log(
+	    "loaded index with " + n + " vertices in " + elapsed + " msec",
+            bbox
+	);
+    },
+    indexSort: function(a, b) {
+        return a[1] - b[1];
+    },
+
+    /**
+     * Find coordinates contained within the target sphere.
+     * @param {float} x the x coordinate of the target sphere
+     * @param {float} y the y coordinate of the target sphere
+     * @param {float} z the z coordinate of the target sphere
+     * @param {float} r the radius of the target sphere
+     * @returns an array of matches [[vi, sqDist], ...] sorted by increasing sqDist
+     *  or null if no matches were found
+     */
+    inSphere: function(x, y, z, r) {
+        var xs = this.indexFirst(this.xIndex, x, x - r);
+        if (xs < 0) {
+            return null;
+        }
+        var xe = this.indexLast(this.xIndex, x, x + r);
+        if (xe < 0) {
+            return null;
+        }
+        var ys = this.indexFirst(this.yIndex, y, y - r);
+        if (xs < 0) {
+            return null;
+        }
+        var ye = this.indexLast(this.yIndex, y, y + r);
+        if (ye < 0) {
+            return null;
+        }
+        var zs = this.indexFirst(this.zIndex, z, z - r);
+        if (xs < 0) {
+            return null;
+        }
+        var ze = this.indexLast(this.zIndex, z, z + r);
+        if (ze < 0) {
+            return null;
+        }
+
+        /* iterate over the smallest range */
+        var xn = xe - xs;
+        var yn = ye - ys;
+        var zn = ze - zs;
+        if (xn <= yn && xn <= zn) {
+            return this.inSphereIndex(x, y, z, r, this.xIndex, xs, xe);
+        } else if (yn <= zn) {
+            return this.inSphereIndex(x, y, z, r, this.yIndex, ys, ye);
+        } else {
+            return this.inSphereIndex(x, y, z, r, this.zIndex, zs, ze);
+        }
+    },
+    inSphereIndex: function(x, y, z, r, index, start, end) {
+        var m = [];
+        var r2 = r * r;
+        var coords = this.coords;
+        while (start <= end) {
+            var vi = index[start++][0];
+            var ci = vi * 3;
+            var cx = coords[ci];
+            var cy = coords[ci + 1];
+            var cz = coords[ci + 2];
+            var dx = cx - x;
+            var dy = cy - y;
+            var dz = cz - z;
+            var d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 <= r2) {
+                m.push([vi, d2]);
+            }
+        }
+        if (m.length == 0) {
+            return null;
+        }
+        m.sort(this.indexSort);
+        return m;
+    },
+
+    /**
+     * Find the first record whose coordinate >= t.
+     */
+    indexFirst: function(index, t) {
+        var i = 0, j = index.length - 1;
+        if (j < 0) {
+            /* empty index */
+            return -1;
+        }
+        var v = index[i][1];
+        if (v >= t) {
+            /* first entry */
+            return i;
+        }
+        v = index[j][1];
+        if (v < t) {
+            /* not contained in the index */
+            return -1;
+        } else if (v != t) {
+            /* binary search */
+            while (i < j) {
+                /*
+                 * invariant:
+                 *  index[i][1] < t
+                 *  index[j][1] > t 
+                 */
+                var m = Math.floor((i + j) / 2);
+                v = index[m][1];
+                if (v == t) {
+                    j = m;
+                    break;
+                } else if (v < t) {
+                    i = m;
+                } else if (v > t) {
+                    j = m;
+                }
+            }
+        }
+        // find the first index[j][1] == v
+        v = index[j][1];
+        while (j - 1 > i) {
+            /*
+             * invariant:
+             *  index[i][1] < v
+             *  index[j][1] >= v
+             */
+            if (index[j - 1][1] == v) {
+                --j;
+            } else {
+                break;
+            }
+        }
+        return j;
+    },
+
+    /**
+     * Find the last record whose coordinate <= t.
+     */
+    indexLast: function(index, t) {
+        var i = 0, j = index.length - 1;
+        if (j < 0) {
+            /* empty index */
+            return -1;
+        }
+        var v = index[j][1];
+        if (v <= t) {
+            /* last entry */
+            return j;
+        }
+        v = index[i][1];
+        if (v > t) {
+            /* not contained in the index */
+            return -1;
+        } else if (v != t) {
+            /* binary search */
+            while (i < j) {
+                /*
+                 * invariant:
+                 *  index[i][1] < t
+                 *  index[j][1] > t 
+                 */
+                var m = Math.floor((i + j) / 2);
+                v = index[m][1];
+                if (v == t) {
+                    i = m;
+                    break;
+                } else if (v < t) {
+                    i = m;
+                } else if (v > t) {
+                    j = m;
+                }
+            }
+        }
+        // find the last index[i][1] >= v
+        v = index[i][1];
+        while (i + 1 < j) {
+            /*
+             * invariant:
+             *  index[i][1] <= v
+             *  index[j][1] > v
+             */
+            if (index[i + 1][1] == v) {
+                ++i;
+            } else {
+                break;
+            }
+        }
+        return i;
+    },
+
+    /**
+     * Debugging routine to validate that all coordinates can be found in the index.
+     */
+    validate: function() {
+	var start = self.performance.now();
+	var valid = true;
+	var coords = this.coords;
+	var n = Math.floor(coords.length / 3);
+        for (var i = 0; i < n; ++i) {
+	    var ci = i * 3;
+	    var x = coords[ci], y = coords[ci + 1], z = coords[ci + 2];
+            var m = this.inSphere(x, y, z, 0);
+            if (!m || m.length != 1 || m[0][0] != i) {
+                valid = false;
+                console.log("invalid match for coordinate #" + i, m, m && m.length);
+                break;
+            }
+        }
+	var elapsed = self.performance.now() - start;
+	utils.debug && console.log(
+	    "validated index with " + n + " vertices in " + elapsed + " msec"
+	);
+        return valid;
     }
 });
 
