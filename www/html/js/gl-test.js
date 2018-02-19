@@ -164,8 +164,8 @@ var App = utils.extend(utils.WebVR, {
         var basePose = {
             CTRLVictoria7: 0.65,
             PBMBreastsSize: 0.25,
-	    PBMNavel: 1.0,
-	    FBMVoluptuous: 0.30
+            PBMNavel: 1.0,
+            FBMVoluptuous: 0.30
         };
         for (var i = 0, n = this.meshes.length; i < n; ++i) {
             var mesh = this.meshes[i];
@@ -254,6 +254,7 @@ var App = utils.extend(utils.WebVR, {
     uiPoseChange: function() {
         var idx = parseInt(this.uiPoseSelect.value);
         this.poseSelect(this.poses[idx]);
+        this.animResync = true;
     },
 
     uiMorphsEnableCreate: function(elements) {
