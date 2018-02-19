@@ -29,6 +29,7 @@ import dson.utils
         "id": "bone_id",
         "name": "bone_name",
         "label": "bone_label",
+        "index": bone_index,
         "center_point": [x, y, z],
         "end_point": [x, y, z],
         "translation": [x, y, z],
