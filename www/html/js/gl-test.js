@@ -270,6 +270,7 @@ var App = utils.extend(utils.WebVR, {
     },
     uiMorphsEnableClick: function() {
         this.MORPHS_ENABLE = this.uiMorphsEnable.checked;
+        this.animResync = true;
     },
 
     uiHairEnableCreate: function(elements) {
@@ -293,8 +294,8 @@ var App = utils.extend(utils.WebVR, {
     uiHairEnableClick: function() {
         this.hairMesh.ENABLE = this.uiHairEnable.checked;
         if (this.hairMesh.ENABLE) {
-            /* TBD: resync animation when re-enabled */
             this.hairMesh.anim.t = this.figureMesh.anim.t;
+            this.animResync = true;
         }
     },
 
@@ -319,8 +320,8 @@ var App = utils.extend(utils.WebVR, {
     uiClothesEnableClick: function() {
         this.clothesMesh.ENABLE = this.uiClothesEnable.checked;
         if (this.clothesMesh.ENABLE) {
-            /* TBD: resync animation when re-enabled */
             this.clothesMesh.anim.t = this.figureMesh.anim.t;
+            this.animResync = true;
         }
     },
 
@@ -418,9 +419,9 @@ var App = utils.extend(utils.WebVR, {
         }
         this.animateLast = t;
 
-        if (this.ANIMATION_SPEED != 0 ||
-            this.morphsEnableLast != this.MORPHS_ENABLE) {
-            this.morphsEnableLast = this.MORPHS_ENABLE;
+        if (this.ANIMATION_SPEED != 0 || this.animResync) {
+            this.animResync = false;
+
             var at = this.animateTime;
             if (at == undefined) {
                 at = this.animateTime = 0;
