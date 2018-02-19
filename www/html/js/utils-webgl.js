@@ -1020,6 +1020,9 @@ utils.ArrayBuffer = utils.extend(utils.Object, {
     set: function(data) {
 	data = this.typeNormalize(data);
 	if (this.data != data) {
+            if (this.created && this.data.byteLength != data.byteLength) {
+                this.created = false;
+            }
 	    this.data = data;
 	    this.dirty = true;
 	}
@@ -1048,7 +1051,7 @@ utils.ArrayBuffer = utils.extend(utils.Object, {
 	    throw new Error(
 		this.name +
 		": buffer data is type " + this.typeName(actualType) +
-		" but expected " + this.typeName(type)
+		" but expected " + this.typeName(this.type)
 	    );
 	}
     },
@@ -1076,25 +1079,35 @@ utils.ArrayBuffer = utils.extend(utils.Object, {
 	return data;
     },
 
-    targetName: function() {
-	switch (this.target) {
+    targetName: function(target) {
+        if (target == undefined) {
+            target = this.target;
+        }
+	switch (target) {
 	case WebGLRenderingContext.ARRAY_BUFFER:
 		return "ARRAY_BUFFER";
 	case WebGLRenderingContext.ELEMENT_ARRAY_BUFFER:
 		return "ELEMENT_ARRAY_BUFFER";
+        case WebGL2RenderingContext.TRANSFORM_FEEDBACK_BUFFER:
+		return "TRANSFORM_FEEDBACK_BUFFER";
 	default:
-		return this.target.toString();
+		return target && target.toString();
 	}
     },
 
-    modeName: function() {
-	switch (this.mode) {
+    modeName: function(mode) {
+        if (mode == undefined) {
+            mode = this.mode;
+        }
+	switch (mode) {
 	case WebGLRenderingContext.TRIANGLES:
 		return "TRIANGLES";
 	case WebGLRenderingContext.LINES:
 		return "LINES";
+	case WebGLRenderingContext.POINTS:
+		return "POINTS";
 	default:
-		return this.mode.toString();
+		return mode && mode.toString();
 	}
     },
 
@@ -1102,10 +1115,16 @@ utils.ArrayBuffer = utils.extend(utils.Object, {
 	switch (this.usage) {
 	case WebGLRenderingContext.STATIC_DRAW:
 		return "STATIC_DRAW";
-	case WebGLRenderingContext.STREAM_DRAW:
-		return "STREAM_DRAW";
 	case WebGLRenderingContext.DYNAMIC_DRAW:
 		return "DYNAMIC_DRAW";
+	case WebGLRenderingContext.STREAM_DRAW:
+		return "STREAM_DRAW";
+	case WebGL2RenderingContext.STATIC_READ:
+		return "STATIC_READ";
+	case WebGL2RenderingContext.DYNAMIC_READ:
+		return "DYNAMIC_READ";
+	case WebGL2RenderingContext.STREAM_READ:
+		return "STREAM_READ";
 	default:
 		return this.usage.toString();
 	}
@@ -1113,20 +1132,65 @@ utils.ArrayBuffer = utils.extend(utils.Object, {
 
     bindBuffer: function(gl) {
 	var buf;
-	switch (this.target) {
-	case WebGLRenderingContext.ARRAY_BUFFER:
+        var target = this.target;
+	switch (target) {
+	case gl.ARRAY_BUFFER:
 	    buf = gl.getParameter(gl.ARRAY_BUFFER_BINDING);
 	    break;
-	case WebGLRenderingContext.ELEMENT_ARRAY_BUFFER:
+	case gl.ELEMENT_ARRAY_BUFFER:
 	    buf = gl.getParameter(gl.ELEMENT_ARRAY_BUFFER_BINDING);
 	    break;
+	default:
+	    // unknown target
+            console.log("unknown target", this, target);
+	    return;
+	}
+	if (buf != this.buffer) {
+            utils.debug > 0 && console.log("bindBuffer", this.name, this.targetName());
+	    gl.bindBuffer(target, this.buffer);
+	}
+    },
+    bindBufferBase: function(gl, target, targetIndex) {
+	var buf;
+	switch (target) {
+        case gl.TRANSFORM_FEEDBACK_BUFFER:
+            buf = gl.getIndexedParameter(gl.TRANSFORM_FEEDBACK_BUFFER_BINDING, targetIndex);
+            break;
 	default:
 	    // unknown target
 	    return;
 	}
 	if (buf != this.buffer) {
-	    utils.debug > 0 && console.log("bindBuffer", this.name, this.targetName());
-	    gl.bindBuffer(this.target, this.buffer);
+            utils.debug > 0 && console.log("bindBufferBase", this.name, this.targetName(target), targetIndex);
+	    gl.bindBufferBase(target, targetIndex, this.buffer);
+	}
+    },
+
+    unbindBuffer: function(gl, target) {
+        if (!this.created) {
+            return;
+        }
+        var buf;
+        if (target == undefined) {
+            target = this.target;
+        }
+	switch (target) {
+	case gl.ARRAY_BUFFER:
+	    buf = gl.getParameter(gl.ARRAY_BUFFER_BINDING);
+	    break;
+	case gl.ELEMENT_ARRAY_BUFFER:
+	    buf = gl.getParameter(gl.ELEMENT_ARRAY_BUFFER_BINDING);
+	    break;
+	default:
+	    // unknown target
+            console.log("unknown target", this, target);
+	    return;
+	}
+	if (buf == this.buffer) {
+            utils.debug > 0 && console.log(
+                "unbindBuffer", this.name, this.targetName(target)
+            );
+	    gl.bindBuffer(target, null);
 	}
     },
 
@@ -1136,11 +1200,19 @@ utils.ArrayBuffer = utils.extend(utils.Object, {
 	}
 	this.dirty = false;
 	this.bindBuffer(gl);
-	utils.debug > 1 && console.log(
-	    "bufferData", this.name, this.targetName(), this.data,
-	    this.usageName()
-	);
-	gl.bufferData(this.target, this.data, this.usage);
+        if (this.created) {
+            utils.debug > 1 && console.log(
+	        "bufferSubData", this.name, this.targetName(), this.data
+	    );
+            gl.bufferSubData(this.target, 0, this.data);
+        } else {
+            utils.debug > 1 && console.log(
+	        "bufferData", this.name, this.targetName(), this.data,
+	        this.usageName()
+	    );
+            gl.bufferData(this.target, this.data, this.usage);
+            this.created = true;
+        }
     },
 
     draw: function(gl) {
@@ -1152,6 +1224,40 @@ utils.ArrayBuffer = utils.extend(utils.Object, {
 	    0, Math.floor(this.data.length / this.size)
 	);
 	gl.drawArrays(this.mode, 0, Math.floor(this.data.length / this.size));
+    },
+
+    bufferData: function(gl, target, srcData, usage, srcOffset, length) {
+        this.target = target;
+        this.usage = usage;
+        this.bindBuffer(gl);
+        if (srcData == null) {
+            srcData = new Uint8Array(length);
+        }
+        utils.debug > 1 && console.log(
+            "bufferData", this.name, this.targetName(), srcData,
+	    this.usageName(),
+            srcOffset, length
+	);
+        gl.bufferData(this.target, srcData, this.usage, srcOffset, length);
+        this.created = true;
+        this.dirty = false;
+    },
+
+    bufferSubData: function(gl, target, dstByteOffset, srcData, srcOffset, length) {
+        utils.assert && utils.assert(
+            this.created,
+            "buffer hasn't been created yet"
+        );
+        this.target = target;
+        this.bindBuffer(gl);
+        utils.debug > 1 && console.log(
+            "bufferSubData", this.name, this.targetName(),
+            dstByteOffset,
+            srcData, srcOffset,
+            length
+	);
+        gl.bufferSubData(this.target, dstByteOffset, srcData, srcOffset, length);
+        this.dirty = false;
     }
 });
 
@@ -1167,6 +1273,18 @@ utils.ArrayBuffer2f = utils.extend(utils.ArrayBuffer, {
 utils.ArrayBuffer4f = utils.extend(utils.ArrayBuffer, {
     /// number of components per attribute
     size: 4
+});
+utils.ArrayBuffer1us = utils.extend(utils.ArrayBuffer, {
+    /// number of components per attribute
+    size: 1,
+    /// component type
+    type: WebGLRenderingContext.UNSIGNED_SHORT
+});
+utils.ArrayBuffer1ui = utils.extend(utils.ArrayBuffer, {
+    /// number of components per attribute
+    size: 1,
+    /// component type
+    type: WebGLRenderingContext.UNSIGNED_INT
 });
 
 utils.ElementBuffer = utils.extend(utils.ArrayBuffer, {
@@ -1303,7 +1421,16 @@ utils.Texture = utils.extend(utils.Object, {
 	    );
 	}
 	this.image = image;
+        this.width = image.width;
+        this.height = image.height;
 	this.dirty = true;
+    },
+    setArrayView: function(arrayView, width, height, offset) {
+        this.arrayView = arrayView;
+        this.width = width;
+        this.height = height;
+        this.offset = offset || 0;
+        this.dirty = true;
     },
 
     update: function(gl) {
@@ -1312,19 +1439,47 @@ utils.Texture = utils.extend(utils.Object, {
 	}
 	this.dirty = false;
 	this.bindTexture(gl);
-	gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, this.flipY);
 	if (this.image != undefined) {
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, this.flipY);
+            utils.debug > 0 && console.log(
+                "texImage2D",
+                this.name, this.targetName(),
+                this.image
+            );
 	    gl.texImage2D(
 		this.target, 0, this.internalFormat,
 		this.format, this.type,
 		this.image
 	    );
 	} else if (this.width != undefined && this.height != undefined) {
-	    gl.texImage2D(
-		this.target, 0, this.internalFormat,
-		this.width, this.height, 0,
-		this.format, this.type
-	    );
+            if (this.arrayView) {
+                utils.debug > 0 && console.log(
+                    "texImage2D",
+                    this.name, this.targetName(),
+                    this.width, this.height,
+                    this.arrayView,
+                    this.offset
+                );
+	        gl.texImage2D(
+	            this.target, 0, this.internalFormat,
+		    this.width, this.height, 0,
+		    this.format, this.type,
+                    this.arrayView,
+                    this.offset
+	        );
+            } else {
+                utils.debug > 0 && console.log(
+                    "texImage2D",
+                    this.name, this.targetName(),
+                    this.width, this.height
+                );
+	        gl.texImage2D(
+	            this.target, 0, this.internalFormat,
+		    this.width, this.height, 0,
+		    this.format, this.type,
+                    null
+	        );
+            }
 	}
 	if (this.mipMaps) {
 	    gl.generateMipmap(this.target);
@@ -1492,11 +1647,57 @@ utils.Program = utils.extend(utils.Object, {
 	}
     },
 
+    varyingsInit: function(gl, varyings, bufferMode) {
+        this.varyings = {};
+        this.varyingItems = [];
+        this.bufferMode = bufferMode;
+        this.feedback = gl.createTransformFeedback();
+        for (var i = 0, n = varyings.length; i < n; ++i) {
+            var name = varyings[i];
+            var item = utils.Varying.create(gl, name);
+            item.targetIndex = i;
+            this.varyings[name] = item;
+            this.varyingItems.push(item);
+        }
+    },
+
     update: function(gl) {
 	for (var i = 0, n = this.items.length; i < n; ++i) {
 	    var item = this.items[i];
 	    item.update(gl);
 	}
+    },
+
+    beginTransformFeedback: function(gl, mode) {
+        if (this.feedback) {
+	    utils.debug > 1 && console.log(
+	        "bindTransformFeedback", this.name
+	    );
+            gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, this.feedback);
+            var items = this.varyingItems;
+            for (var i = 0, n = items.length; i < n; ++i) {
+                items[i].update(gl);
+            }
+	    utils.debug > 1 && console.log(
+	        "beginTransformFeedback", this.name,
+	        utils.ArrayBuffer.modeName(mode)
+	    );
+            gl.beginTransformFeedback(mode);
+        }
+    },
+
+    endTransformFeedback: function(gl) {
+        if (this.feedback) {
+	    utils.debug > 1 && console.log(
+	        "endTransformFeedback"
+	    );
+            gl.endTransformFeedback();
+            gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+            var items = this.varyingItems;
+            for (var i = 0, n = items.length; i < n; ++i) {
+                items[i].unbind(gl);
+            }
+        }
     }
 });
 
@@ -1541,6 +1742,12 @@ utils.Uniform = utils.extend(utils.ProgramItem, {
 });
 
 utils.Uniform1i = utils.extend(utils.Uniform, {
+    set: function(value) {
+        if (this.value != value) {
+            this.value = value;
+	    this.dirty = true;
+        }
+    },
     update: function(gl) {
 	if (!this.dirty) {
 	    return;
@@ -1554,6 +1761,12 @@ utils.Uniform1i = utils.extend(utils.Uniform, {
 });
 
 utils.Uniform1f = utils.extend(utils.Uniform, {
+    set: function(value) {
+        if (this.value != value) {
+            this.value = value;
+	    this.dirty = true;
+        }
+    },
     update: function(gl) {
 	if (!this.dirty) {
 	    return;
@@ -1635,6 +1848,10 @@ utils.Attribute = utils.extend(utils.ProgramItem, {
     setup: function(gl, name, program) {
 	utils.ProgramItem.setup.call(this, name, program.name);
 	this.location = gl.getAttribLocation(program.program, name);
+        utils.assert && utils.assert(
+            this.location >= 0,
+            program.name + "." + name + " location unknown"
+        );
     }
 });
 
@@ -1663,11 +1880,8 @@ utils.AttributeBuffer = utils.extend(utils.Attribute, {
 	value.update(gl);
 	value.bindBuffer(gl);
 	utils.debug > 2 && console.log(
-	    "enableVertexAttribArray", this.displayName()
-	);
-	gl.enableVertexAttribArray(this.location);
-	utils.debug > 2 && console.log(
-	    "enableVertexAttribPointer", this.displayName(), value.name,
+	    "vertexAttribPointer", this.displayName() + "=" + this.location,
+            value.name,
 	    value.size, value.typeName(), value.normalized,
 	    value.stride, value.offset
 	);
@@ -1675,6 +1889,40 @@ utils.AttributeBuffer = utils.extend(utils.Attribute, {
 	    this.location, value.size, value.type, value.normalized,
 	    value.stride, value.offset
 	);
+	utils.debug > 2 && console.log(
+	    "enableVertexAttribArray", this.displayName() + "=" + this.location
+	);
+	gl.enableVertexAttribArray(this.location);
+    }
+});
+
+utils.Varying = utils.extend(utils.Attribute, {
+    /// the bindBufferBase index
+    targetIndex: 0,
+
+    set: function(value) {
+	utils.assert && utils.assert(
+	    value && value.target == WebGLRenderingContext.ARRAY_BUFFER,
+	    this.displayName() + ":  setting to an invalid buffer value"
+	);
+	utils.Attribute.set.call(this, value);
+    },
+
+    update: function(gl) {
+	var value = this.value;
+	if (value == null){
+	    return;
+	}
+	utils.assert && utils.assert(
+	    value,
+	    this.displayName() + ": value is null"
+	);
+	value.update(gl);
+	//value.bindBufferBase(gl, gl.TRANSFORM_FEEDBACK_BUFFER, this.targetIndex);
+        gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, this.targetIndex, value.buffer);
+    },
+    unbind: function(gl) {
+        gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, this.targetIndex, null);
     }
 });
 
@@ -1689,8 +1937,13 @@ utils.AssetFigure = utils.extend(utils.AssetRequest, {
 	if (!config.responseType) {
 	    config.responseType = 'json';
 	}
-        if (!config.url && config.name) {
-            config.url = "lib/models/" + config.name + "/model.json";
+        if (!config.url.endsWith(".json")) {
+            /*
+             * assume url is just the base name:
+             *	url: lib/models/BASE/model.json
+             *  textureDir: lib/models
+             */
+            config.url = "lib/models/" + config.url + "/model.json";
             this.textureDir = "lib/models";
         }
 	utils.AssetRequest.init.call(this, config);
@@ -1699,7 +1952,7 @@ utils.AssetFigure = utils.extend(utils.AssetRequest, {
 
     get: function(library) {
 	var images = this.model.images;
-	if (images) {
+	if (images && library) {
 	    if (!library.images) {
 		library.images = {};
 		library.imageMaps = {};
@@ -1743,8 +1996,28 @@ utils.AssetFigure = utils.extend(utils.AssetRequest, {
 
     ready: function() {
 	this.model = this.responseJSON();
-	this.imagesLoad();
+        this.scriptsLoad();
+        if (this.config.loadImages !== false) {
+            this.imagesLoad();
+        }
 	utils.AssetRequest.ready.call(this);
+    },
+
+    scriptsLoad: function() {
+        var scripts = this.config.scripts;
+        if (scripts) {
+            for (var i = 0, n = scripts.length; i < n; ++i) {
+                var script = scripts[i];
+		var asset = this.loader.library[script];
+		if (!asset) {
+		    asset = utils.AssetScript.create({
+			src: script
+		    });
+		    this.loader.library[script] = asset;
+		    this.loader.append(asset);
+		}
+            }
+        }
     },
 
     imagesLoad: function() {
@@ -1765,9 +2038,20 @@ utils.AssetFigure = utils.extend(utils.AssetRequest, {
                     continue;
                 }
                 if (this.config.remap) {
-                    var remap = this.config.remap[file];
+                    var fileBase = file;
+                    var fileDir;
+                    var dirSep = file.lastIndexOf('/');
+                    if (dirSep > 0) {
+                        ++dirSep;
+                        fileDir = file.substring(0, dirSep);
+                        fileBase = file.substring(dirSep);
+                    }
+                    var remap = this.config.remap[fileBase];
                     if (remap) {
                         file = remap;
+                        if (fileDir) {
+                            file = fileDir + file;
+                        }
                     }
                 }
 		var src = this.textureDir ? this.textureDir + "/" + file : file;
@@ -1811,14 +2095,34 @@ utils.AssetShader = utils.extend(utils.AssetLoader, {
 	this.program = null;
     },
 
-    compile: function(sourceCode, type) {
+    /// regular expression to find #defines to replace (#define NAME __NAME__)
+    defineRE: /#\s*define\s+(\w+)\s+__(\1)__/g,
+
+    /**
+     * Preprocess the source code.
+     */
+    preprocess: function(url, sourceCode) {
+        var defines = this.config.defines;
+        return sourceCode.replace(this.defineRE, function(match, p1, p2, offset, string) {
+            var value = defines && defines[p2];
+            if (value) {
+                var repl = "#define " + p1 + " " + value;
+                utils.debug && console.log("preprocess", url, repl);
+                return repl;
+            } else {
+                throw new Error(url + ": missing value for #define " + p1);
+            }
+        });
+    },
+
+    compile: function(url, sourceCode, type) {
 	var gl = this.config.gl;
 	var shader = gl.createShader(type);
-	gl.shaderSource(shader, sourceCode);
+	gl.shaderSource(shader, this.preprocess(url, sourceCode));
 	gl.compileShader(shader);
 	if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
 	    var info = gl.getShaderInfoLog(shader);
-	    this.error("Could not compile WebGL program.\n\n" + info);
+	    this.error(url + ": Could not compile WebGL program.\n\n" + info);
 	    return null;
 	}
 	return shader;
@@ -1827,6 +2131,7 @@ utils.AssetShader = utils.extend(utils.AssetLoader, {
     ready: function() {
 	var gl = this.config.gl;
 	var vertexShader = this.compile(
+	    this.cache.vertexShader.config.url,
 	    this.cache.vertexShader.responseText(),
 	    gl.VERTEX_SHADER
 	);
@@ -1834,20 +2139,28 @@ utils.AssetShader = utils.extend(utils.AssetLoader, {
 	    return;
 	}
 	var fragmentShader = this.compile(
+	    this.cache.fragmentShader.config.url,
 	    this.cache.fragmentShader.responseText(),
 	    gl.FRAGMENT_SHADER
 	);
-	if (!fragmentShader) {
+        if (!fragmentShader) {
+            gl.deleteShader(vertexShader);
 	    return;
 	}
 
 	var program = gl.createProgram();
 	gl.attachShader(program, vertexShader);
 	gl.attachShader(program, fragmentShader);
+        var varyings = this.config.varyings;
+        if (varyings) {
+            gl.transformFeedbackVaryings(program, varyings, this.config.bufferMode);
+        }
 	gl.linkProgram(program);
 	if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
 	    var info = gl.getProgramInfoLog(program);
-	    this.error("Could not link WebGL program.\n\n" + info);
+	    this.error(this.config.name + ": Could not link WebGL program.\n\n" + info);
+            gl.deleteShader(vertexShader);
+            gl.deleteShader(fragmentShader);
 	    return;
 	}
 	this.program = utils.Program.create(gl, this.config.name, program);
@@ -1857,6 +2170,11 @@ utils.AssetShader = utils.extend(utils.AssetLoader, {
 	if (this.config.attributes) {
 	    this.program.attributesInit(gl, this.config.attributes);
 	}
+        if (varyings) {
+            this.program.varyingsInit(gl, varyings, this.config.bufferMode);
+        }
+        gl.deleteShader(vertexShader);
+        gl.deleteShader(fragmentShader);
 	utils.AssetLoader.ready.call(this);
     }
 });

@@ -194,15 +194,13 @@ utils.WebVR = utils.extend(utils.App, {
 
     vrRender: function(timestamp, frameData) {
 	var gl = this.gl;
-	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
 	var canvas = this.canvas;
 	var w = canvas.width * 0.5;
 	var h = canvas.height;
 
-	gl.enable(gl.DEPTH_TEST);
-	gl.depthMask(true);
-	gl.depthFunc(gl.LESS);
+        // shared pre stereo draw
+        this.timestamp = timestamp;
+        this.vrDrawPre(frameData);
 
 	// draw left eye view
 	gl.viewport(0, 0, w,  h);
@@ -211,5 +209,20 @@ utils.WebVR = utils.extend(utils.App, {
 	// draw right eye view
 	gl.viewport(w, 0, w, h);
 	this.vrDraw(frameData.rightProjectionMatrix, frameData.rightViewMatrix);
+
+        // shared post stereo draw
+        this.vrDrawPost(frameData);
+    },
+
+    vrDrawPre: function(frameData) {
+	var gl = this.gl;
+	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+	gl.enable(gl.DEPTH_TEST);
+	gl.depthMask(true);
+	gl.depthFunc(gl.LESS);
+    },
+
+    vrDrawPost: function(frameData) {
+        /*EMPTY*/
     }
 });
