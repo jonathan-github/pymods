@@ -1,4 +1,4 @@
-utils.debug = 1;
+utils.debug = 3;
 
 var App = utils.extend(utils.WebVR, {
     VR_ENABLE: true,
@@ -439,7 +439,7 @@ var App = utils.extend(utils.WebVR, {
             }
         }
 
-        var rotateY = this.debugRotateY;
+        var rotateY = this.ROTATION;
         if (this.ROTATION_SPEED != 0) {
             var rt = this.rotateTime;
             if (rt == undefined) {
@@ -449,9 +449,7 @@ var App = utils.extend(utils.WebVR, {
                 rt += dt * this.ROTATION_SPEED;
                 this.rotateTime = rt;
             }
-            rotateY = (rt * 6) % 360; // 60 sec = 360 deg
-        } else {
-            rotateY = this.ROTATION;
+            rotateY = (rt * 360/60) % 360; // 360deg/60sec = 1 RPM
         }
 
         if (this.rotateYLast != rotateY) {
@@ -474,6 +472,28 @@ var App = utils.extend(utils.WebVR, {
     },
 
     render: function() {
+        this.renderPre();
+        this.renderView();
+        this.renderPost();
+
+        if (true) {
+            //return;
+        }
+        if (true) {
+            utils.debug = 0;
+            this.context.validate = false;
+            this.renderRequest();
+        } else {
+            if (this.frameCounter < 2) {
+                this.renderRequest();
+            } else {
+                utils.debug = 0;
+                this.context.validate = false;
+            }
+        }
+    },
+
+    renderPre: function() {
         var start = this.renderTimer.start();
 
         ++this.frameCounter;
@@ -496,10 +516,9 @@ var App = utils.extend(utils.WebVR, {
         GL.MeshDqs.transformApplyProgram.useProgram();
         for (var i = 0, n = meshes.length; i < n; ++i) {
             var mesh = meshes[i];
-            if (!mesh.ENABLE) {
-                continue;
+            if (mesh.ENABLE) {
+                mesh.transformApply();
             }
-            mesh.transformApply();
         }
         this.transformTimer.stop();
 
@@ -507,34 +526,33 @@ var App = utils.extend(utils.WebVR, {
         GL.MeshDqs.normalsComputeProgram.useProgram();
         for (var i = 0, n = meshes.length; i < n; ++i) {
             var mesh = meshes[i];
-            if (!mesh.ENABLE) {
-                continue;
+            if (mesh.ENABLE) {
+                mesh.normalsCompute();
             }
-            mesh.normalsCompute();
         }
-        gl.disable(gl.RASTERIZER_DISCARD);
         this.normalsTimer.stop();
 
+        gl.disable(gl.RASTERIZER_DISCARD);
         gl.enable(gl.DEPTH_TEST);
 
         this.drawTimer.start();
+    },
+
+    renderView: function() {
+        var meshes = this.meshes;
         var program = GL.MeshDqs.normalsDebugProgram;
+
         program.useProgram();
         for (var i = 0, n = meshes.length; i < n; ++i) {
             var mesh = meshes[i];
-            if (!mesh.ENABLE) {
-                continue;
+            if (mesh.ENABLE) {
+                mesh.normalsDebugDraw();
             }
-            program.uniforms.uCoords.set(mesh.uCoordsTex);
-            program.uniforms.uNormals.set(mesh.uNormalsTex);
-            program.flush();
-            mesh.debugIndices.bind(gl.ELEMENT_ARRAY_BUFFER);
-            this.context.drawElements(gl.TRIANGLES,
-                                      mesh.numIndices,
-                                      gl.UNSIGNED_INT, 0);
         }
         this.drawTimer.stop();
+    },
 
+    renderPost: function() {
         var end = this.renderTimer.stop();
         var elapsed = end - this.reportTime;
         if (elapsed >= 2000) {
@@ -551,58 +569,10 @@ var App = utils.extend(utils.WebVR, {
                 "draw": this.drawTimer.ema.toFixed(2) + " ms"
             }, ["fps", "render", "animate", "DQS", "normals", "draw"]);
         }
-
-        if (true) {
-            //return;
-        }
-        if (true) {
-            utils.debug = 0;
-            this.renderRequest();
-        } else {
-            if (this.frameCounter < 2) {
-                this.renderRequest();
-            } else {
-                utils.debug = 0;
-            }
-        }
     },
 
     vrDrawPre: function(frameData) {
-        var start = this.renderTimer.start();
-
-        ++this.frameCounter;
-        utils.debug && console.info("vrDrawPre", this.frameCounter);
-
-        var context = this.context;
-        var gl = context.gl;
-        var meshes = this.meshes;
-
-        gl.clearColor(0.3, 0.3, 0.3, 1);
-        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
-        this.animateTimer.start();
-        this.animate(start);
-        this.animateTimer.stop();
-
-        gl.enable(gl.RASTERIZER_DISCARD);
-
-        this.transformTimer.start();
-        GL.MeshDqs.transformApplyProgram.useProgram();
-        for (var i = 0, n = meshes.length; i < n; ++i) {
-            meshes[i].transformApply();
-        }
-        this.transformTimer.stop();
-
-        this.normalsTimer.start();
-        GL.MeshDqs.normalsComputeProgram.useProgram();
-        for (var i = 0, n = meshes.length; i < n; ++i) {
-            meshes[i].normalsCompute();
-        }
-        this.normalsTimer.stop();
-
-        gl.disable(gl.RASTERIZER_DISCARD);
-        gl.enable(gl.DEPTH_TEST);
-        this.drawTimer.start();
+        this.renderPre();
     },
 
     VR_VIEW_TRANSLATE: [0, -1.5, -0.5],
@@ -612,45 +582,17 @@ var App = utils.extend(utils.WebVR, {
 
         mat4.translate(this.vMatrixVR, vMatrix, this.VR_VIEW_TRANSLATE);
 
-        var context = this.context;
-        var gl = context.gl;
-        var meshes = this.meshes;
-
         var program = GL.MeshDqs.normalsDebugProgram;
-        program.useProgram();
-        for (var i = 0, n = meshes.length; i < n; ++i) {
-            var mesh = meshes[i];
-            program.uniforms.pMatrix.set(pMatrix).dirty = true;
-            program.uniforms.vMatrix.set(this.vMatrixVR).dirty = true;
-            program.uniforms.uCoords.set(mesh.uCoordsTex);
-            program.uniforms.uNormals.set(mesh.uNormalsTex);
-            program.flush();
-            mesh.debugIndices.bind(gl.ELEMENT_ARRAY_BUFFER);
-            this.context.drawElements(gl.TRIANGLES,
-                                      mesh.numIndices,
-                                      gl.UNSIGNED_INT, 0);
-        }
+        program.uniforms.pMatrix.set(pMatrix).dirty = true;
+        program.uniforms.vMatrix.set(this.vMatrixVR).dirty = true;
+
+        this.renderView();
     },
 
     vrDrawPost: function(frameData) {
-        this.drawTimer.stop();
-        var end = this.renderTimer.stop();
-        var elapsed = end - this.reportTime;
-        if (elapsed >= 2000) {
-            var frames = this.frameCounter - this.reportFrame;
-            this.reportFrame = this.frameCounter;
-            this.reportFps = frames / elapsed * 1000;
-            this.reportTime = end;
-            this.overlay.show({
-                "fps": (frames / elapsed * 1000).toFixed(2),
-                "render": this.renderTimer.ema.toFixed(2) + " ms",
-                "animate": this.animateTimer.ema.toFixed(2) + " ms",
-                "DQS": this.transformTimer.ema.toFixed(2) + " ms",
-                "normals": this.normalsTimer.ema.toFixed(2) + " ms",
-                "draw": this.drawTimer.ema.toFixed(2) + " ms"
-            }, ["fps", "render", "animate", "DQS", "normals", "draw"]);
-        }
+        this.renderPost();
 
         utils.debug = 0;
+        this.context.validate = false;
     }
 });
