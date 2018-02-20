@@ -26,7 +26,6 @@ GL.Context = utils.extend(GL.ContextBase, {
         this.activeTextureTargets = undefined;
         this.textureTargets = {};
         this.validate = true;
-        this.MAX_TEXTURE_SIZE = gl.getParameter(gl.MAX_TEXTURE_SIZE);
         return this;
     },
 
@@ -361,16 +360,16 @@ GL.Context = utils.extend(GL.ContextBase, {
     bindVertexArray: function(vao) {
         var gl = this.gl;
         var cur = this.vertexArrayGet();
-        if (cur == vao.glVAO) {
+        if (cur == vao.glVertexArray) {
             /* already bound */
             return;
         }
-        (utils.debug || buffer.debug) && console.log(
+        (utils.debug || vao.debug) && console.log(
             vao.name,
             "bindVertexArray"
         );
-        gl.bindVertexArray(vao.glVAO);
-        this.vertexArray = vao.glVAO;
+        gl.bindVertexArray(vao.glVertexArray);
+        this.vertexArray = vao.glVertexArray;
     },
 
     unbindVertexArray: function(vao) {
@@ -381,11 +380,11 @@ GL.Context = utils.extend(GL.ContextBase, {
                 /* not bound */
                 return;
             }
-        } else if (cur != vao.glVAO) {
+        } else if (cur != vao.glVertexArray) {
             /* not bound */
             return;
         }
-        (utils.debug || buffer.debug) && console.log(
+        (utils.debug || vao.debug) && console.log(
             vao && vao.name || "null",
             "unbindVertexArray"
         );
@@ -454,6 +453,7 @@ GL.Buffer = utils.extend(utils.Object, {
             this.allocated = false;
             this.glBuffer = null;
             this.context = null;
+            this.config = null;
         }
     },
 
@@ -826,6 +826,7 @@ GL.Sampler = utils.extend(utils.Object, {
             this.context.gl.deleteSampler(glSampler);
             this.glSampler = null;
             this.context = null;
+            this.config = null;
         }
     },
 
@@ -1003,6 +1004,7 @@ GL.Texture = utils.extend(utils.Object, {
             this.allocated = false;
             this.glTexture = null;
             this.context = null;
+            this.config = null;
         }
     },
 
@@ -1488,6 +1490,7 @@ GL.Shader = utils.extend(utils.Object, {
             this.context.gl.deleteShader(glShader);
             this.glShader = null;
             this.context = null;
+            this.config = null;
         }
     },
 
@@ -1920,6 +1923,7 @@ GL.TransformFeedback = utils.extend(utils.Object, {
             gl.deleteTransformFeedback(glFeedback);
             this.glFeedback = null;
             this.context = null;
+            this.config = null;
         }
     },
 
@@ -2022,12 +2026,13 @@ GL.Program = utils.extend(utils.Object, {
             );
             this.context.gl.deleteProgram(glProgram);
             this.uniforms = null;
-            this.attributes = null;
+            this.attributeInfo = null;
             this.varyings = null;
             this.varyingItems = null;
             this.items = null;
             this.glProgram = null;
             this.context = null;
+            this.config = null;
         }
     },
 
@@ -2107,7 +2112,7 @@ GL.Program = utils.extend(utils.Object, {
         var gl = this.context.gl;
         var glProgram = this.glProgram;
 
-        this.attributes = {};
+        this.attributeInfo = [];
         var n = gl.getProgramParameter(glProgram, gl.ACTIVE_ATTRIBUTES);
         for (var i = 0; i < n; ++i) {
             var info = gl.getActiveAttrib(glProgram, i);
@@ -2136,9 +2141,11 @@ GL.Program = utils.extend(utils.Object, {
                     ": attribute " + name + " location error"
                 );
             }
-            var item = cls.create(this, itemName, index, info);
-            this.attributes[name] = item;
-            this.items.push(item);
+            this.attributeInfo.push({
+                cls: cls,
+                index: index,
+                info: info
+            });
         }
     },
 
@@ -2188,33 +2195,66 @@ GL.Program = utils.extend(utils.Object, {
 GL.VertexArray = utils.extend(utils.Object, {
     TYPE: 'VertexArray',
 
-    init: function(context, config) {
-        var gl = context.gl;
-        this.context = context;
+    /**
+     * config = {
+     *   name: <string>,
+    *    program: <GL.Program>
+     * }
+     */
+    init: function(config) {
         this.config = config;
-	this.glVAO = gl.createVertexArray();
-        context.objectName(this);
-        return this;
+
+        var program = config.program;
+        var context = program.context;
+        var gl = context.gl;
+        var glProgram = program.glProgram;
+
+        this.name = config.name || program.name;
+	this.glVertexArray = gl.createVertexArray();
+
+        this.items = [];
+        this.attributes = {};
+        var attrs = program.attributeInfo;
+        for (var i = 0, n = attrs.length; i < n; ++i) {
+            var attr = attrs[i];
+            var info = attr.info;
+            var item = attr.cls.create(
+                program,
+                this.name + "." + info.name,
+                attr.index,
+                info
+            );
+            this.attributes[info.name] = item;
+            this.items.push(item);
+        }
     },
 
     fini: function() {
-        var glVAO = this.glVAO;
-        if (glVAO) {
+        var glVertexArray = this.glVertexArray;
+        if (glVertexArray) {
             (utils.debug || this.debug) && console.log(
                 this.name,
                 "deleteVertexArray"
             );
-            this.context.gl.deleteVertexArray(glVAO);
-            this.glVAO = null;
-            this.context = null;
+            this.config.program.context.gl.deleteVertexArray(glVertexArray);
+            this.glVertexArray = null;
+            this.config = null;
         }
     },
 
     bind: function() {
-        this.context.bindVertexArray(this);
+        this.config.program.context.bindVertexArray(this);
     },
-    unbind: function(target) {
-        this.context.unbindVertexArray(this);
+    unbind: function() {
+        this.config.program.context.unbindVertexArray(this);
+    },
+
+    flush: function() {
+        var items = this.items;
+        for (var i = 0, n = items.length; i < n; ++i) {
+            var item = items[i];
+            item.flush();
+        }
     }
 });
 

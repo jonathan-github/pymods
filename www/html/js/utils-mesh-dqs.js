@@ -54,6 +54,16 @@ GL.MeshDqs = utils.extend(utils.Object, {
      */
     initAssets: function(context, loader) {
         var gl = context.gl;
+        console.assert(
+            gl.getParameter(gl.MAX_TEXTURE_SIZE) >= this.ARRAY_CHUNK,
+            "MAX_TEXTURE_SIZE must be >= ARRAY_CHUNK"
+        );
+        console.assert(
+            gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) >= 5,
+            "MAX_VERTEX_TEXTURE_IMAGE_UNITS must be >= 5"
+        );
+
+        var gl = context.gl;
         var defines = {
             ARRAY_CHUNK: this.ARRAY_CHUNK + 'u'
         };
@@ -134,6 +144,7 @@ GL.MeshDqs = utils.extend(utils.Object, {
         this.initBones();
         this.initNeighbors();
         this.initDebug();
+        this.initVAOs();
         return this;
     },
 
@@ -566,22 +577,43 @@ GL.MeshDqs = utils.extend(utils.Object, {
         });
     },
 
+    initVAOs: function() {
+        this.transformVAO = GL.VertexArray.create({
+            name: this.config.name + ".transformVAO",
+            program: this.transformApplyProgram
+        });
+        this.transformVAO.attributes.aCoord.set(this.aCoordBuf);
+        this.transformVAO.attributes.aWeightIndex.set(this.aWeightIndexBuf);
+
+        this.normalsVAO = GL.VertexArray.create({
+            name: this.config.name + ".normalsVAO",
+            program: this.normalsComputeProgram
+        });
+        this.normalsVAO.attributes.aNeighborIndex.set(this.aNeighborIndexBuf);
+    },
+
     transformApply: function() {
-        var gl = this.context.gl;
+        var context = this.context;
+        var gl = context.gl;
         var program = this.transformApplyProgram;
 
         program.uniforms.uBones.set(this.uBonesTex);
         program.uniforms.uWeights.set(this.uWeightsTex);
-        program.attributes.aCoord.set(this.aCoordBuf).dirty = true;
-        program.attributes.aWeightIndex.set(this.aWeightIndexBuf).dirty = true;
         program.flush();
+
+        this.transformVAO.bind();
+        this.transformVAO.flush();
 
         program.varyings.vCoord.bufferBase(this.vCoord);
         this.coordsFeedback.begin(program, gl.POINTS);
-        this.context.drawArrays(gl.POINTS, 0, this.numVertices);
+        context.drawArrays(gl.POINTS, 0, this.numVertices);
         this.coordsFeedback.end();
 
+        this.transformVAO.unbind();
+
+        // TBD: copy vCoord to uCoords now or later?
         // copy vCoord to uCoords
+        context.activeTexture(this.uCoordsTex.textureUnit);
         this.uCoords.copyBuffer(this.vCoordCopyBuffer);
 
         if (false && utils.debug) {
@@ -594,22 +626,37 @@ GL.MeshDqs = utils.extend(utils.Object, {
             );
         }
     },
+    transformCopy: function() {
+        // copy vCoord to uCoords
+        this.context.activeTexture(this.uCoordsTex.textureUnit);
+        this.uCoords.copyBuffer(this.vCoordCopyBuffer);
+    },
 
     normalsCompute: function() {
-        var gl = this.context.gl;
+        var context = this.context;
+        var gl = context.gl;
         var program = this.normalsComputeProgram;
+
+        // get updated uCoords
+        //this.transformCopy();
 
         program.uniforms.uCoords.set(this.uCoordsTex);
         program.uniforms.uNeighbors.set(this.uNeighborsTex);
-        program.attributes.aNeighborIndex.set(this.aNeighborIndexBuf).dirty = true;
         program.flush();
+
+        this.normalsVAO.bind();
+        this.normalsVAO.flush();
 
         program.varyings.vNormal.bufferBase(this.vNormal);
         this.normalsFeedback.begin(program, gl.POINTS);
-        this.context.drawArrays(gl.POINTS, 0, this.numVertices);
+        context.drawArrays(gl.POINTS, 0, this.numVertices);
         this.normalsFeedback.end();
 
+        this.normalsVAO.unbind();
+
+        // TBD: copy vNormal to uNormals now or later?
         // copy vNormal to uNormals
+        context.activeTexture(this.uNormalsTex.textureUnit);
         this.uNormals.copyBuffer(this.vNormalCopyBuffer);
 
         if (false && utils.debug) {
@@ -621,6 +668,29 @@ GL.MeshDqs = utils.extend(utils.Object, {
                 this.normals
             );
         }
+    },
+    normalsCopy: function() {
+        // copy vNormal to uNormals
+        this.context.activeTexture(this.uNormalsTex.textureUnit);
+        this.uNormals.copyBuffer(this.vNormalCopyBuffer);
+    },
+
+    normalsDebugDraw: function() {
+        var context = this.context;
+        var gl = context.gl;
+        var program = this.normalsDebugProgram;
+
+        // TBD: don't do this here if VR rendering (only need to copy once)
+        // get updated uNormals
+        //this.normalsCopy();
+
+        program.uniforms.uCoords.set(this.uCoordsTex);
+        program.uniforms.uNormals.set(this.uNormalsTex);
+        program.flush();
+        this.debugIndices.bind(gl.ELEMENT_ARRAY_BUFFER);
+        context.drawElements(gl.TRIANGLES,
+                             this.numIndices,
+                             gl.UNSIGNED_INT, 0);
     },
 
     animate: function(sampler, t) {
