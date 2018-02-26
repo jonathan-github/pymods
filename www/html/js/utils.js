@@ -499,6 +499,8 @@ utils.EMA = utils.extend(utils.Object, {
 	this.ema = 0;
 	this.min = 0;
 	this.max = 0;
+        this.timer = null;
+        this.elapsed = 0;
     },
 
     /**
@@ -544,24 +546,49 @@ utils.EMA = utils.extend(utils.Object, {
     start: function() {
         var start = self.performance.now();
         this.timer = start;
+        this.elapsed = 0;
         return start;
-    },
-    elapsed: function() {
-        var start = this.timer;
-        if (start != null) {
-            return 0;
-        }
-        var now = self.performance.now();
-        return now - start;
     },
     stop: function() {
         var start = this.timer;
         var end = self.performance.now();
         this.timer = end;
         if (start != null) {
-            this.update(end - start);
+            this.update(this.elapsed + (end - start));
         }
         return end;
+    },
+
+    elapsed: function() {
+        var start = this.timer;
+        if (start != null) {
+            return 0;
+        }
+        var now = self.performance.now();
+        return this.elapsed + (now - start);
+    },
+
+    pause: function() {
+        var start = this.timer;
+        if (start == null) {
+            return;
+        }
+        var now = self.performance.now();
+        this.timer = now;
+        this.elapsed += now - start;
+    },
+    resume: function() {
+        var start = self.performance.now();
+        if (this.timer == null) {
+            this.elapsed = 0;
+        }
+        this.timer = start;
+        return start;
+    },
+    done: function() {
+        this.update(this.elapsed);
+        this.timer = null;
+        this.elapsed = 0;
     }
 });
 
@@ -1315,6 +1342,153 @@ utils.AssetRequest = utils.extend(utils.Asset, {
 	this.error(
 	    this.config.url + ":  request aborted"
 	);
+    }
+});
+
+/**
+ * Prototype fetch loader.
+ * @mixin
+ * @mixes utils.Asset
+ */
+utils.AssetFetch = utils.extend(utils.Asset, {
+    init: function(config) {
+	utils.Asset.init.call(this, config);
+	return this;
+    },
+
+    load: function() {
+        fetch(this.config.url).then(
+            this.loadEvent.bind(this),
+            this.errorEvent.bind(this)
+        );
+    },
+
+    loadEvent: function(response) {
+        console.log("loadEvent", response);
+        if (this.statusCheck(response)) {
+            utils.debug && console.log(
+                "loaded " + this.config.url
+	    );
+            if (this.process(response)) {
+                this.ready();
+            }
+        }
+    },
+
+    /**
+     * Process the response.
+     * @return true if the response is ready, false is not
+     */
+    process: function(response) {
+        this.response = response;
+        return true;
+    },
+
+    errorEvent: function(reason) {
+	this.error(
+	    this.config.url + ": " + reason
+	);
+    },
+
+    cleanup: function() {
+	utils.Asset.cleanup.call(this);
+        this.response = null;
+    },
+
+    statusCheck: function(response, code) {
+        var ok = (code == undefined
+                  ? response.ok
+                  : response.status == code);
+	if (!ok) {
+	    this.error(
+		this.config.url + ": " + response.statusText +
+		" (" + response.status + ")"
+	    );
+	    return false;
+	} else {
+	    return true;
+	}
+    }
+});
+
+/**
+ * WebAssembly loader
+ */
+utils.AssetWasm = utils.extend(utils.AssetFetch, {
+    init: function(config) {
+	utils.AssetFetch.init.call(this, config);
+	return this;
+    },
+
+    process: function(response) {
+        if (response.url.startsWith("file:")) {
+            /*
+             * WebAssembly compileStreaming or instantiateStreaming
+             * reject with an unsupported MIME type error when
+             * loading directly from a file.
+             * To work around this, resolve the response to an array buffer
+             * and then call the non-streaming versions.
+             */
+            response.arrayBuffer().then(
+                this.arrayBufferEvent.bind(this),
+                this.errorEvent.bind(this)
+            );
+        } else {
+            this.processStreaming(response);
+        }
+    },
+    arrayBufferEvent: function(buffer) {
+        if (this.config.compileOnly) {
+            WebAssembly.compile(
+                buffer
+            ).then(
+                this.compileEvent.bind(this),
+                this.errorEvent.bind(this)
+            );
+        } else {
+            WebAssembly.instantiate(
+                buffer,
+                this.config.importObject || {}
+            ).then(
+                this.instantiateEvent.bind(this),
+                this.errorEvent.bind(this)
+            );
+        }
+    },
+    processStreaming: function(response) {
+        if (this.config.compileOnly) {
+            WebAssembly.compileStreaming(
+                response
+            ).then(
+                this.compileEvent.bind(this),
+                this.errorEvent.bind(this)
+            );
+        } else {
+            WebAssembly.instantiateStreaming(
+                response,
+                this.config.importObject
+            ).then(
+                this.instantiateEvent.bind(this),
+                this.errorEvent.bind(this)
+            );
+        }
+    },
+
+    compileEvent: function(module) {
+        this.module = module;
+        this.ready();
+    },
+
+    instantiateEvent: function(resultObject) {
+        this.module = resultObject.module;
+        this.instance = resultObject.instance;
+        this.ready();
+    },
+
+    cleanup: function() {
+	utils.AssetFetch.cleanup.call(this);
+        this.module = null;
+        this.instance = null;
     }
 });
 
