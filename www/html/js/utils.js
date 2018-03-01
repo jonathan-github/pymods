@@ -1773,11 +1773,11 @@ utils.Memory = utils.extend(utils.Object, {
         }
         this.dataView = new DataView(this.memory.buffer);
         this.blocks = [];
+        this.views = [];
         this.used = 0;
     },
 
     malloc: function(size) {
-        var blocks = this.blocks, block;
         var avail = this.memory.buffer.byteLength - this.used;
         var blockSize = size;
         var padding = size % 8;
@@ -1796,19 +1796,18 @@ utils.Memory = utils.extend(utils.Object, {
 
             /* rebuild the data and typed array views */
             this.dataView = new DataView(this.memory.buffer);
+            var views = this.views;
             var buffer = this.memory.buffer;
-            for (var i = 0, n = blocks.length; i < n; ++i) {
-                block = blocks[i];
-                if (block.arrayType) {
-                    block.array = new block.arrayType(buffer, block.offset, block.arrayLength);
-                }
+            for (var i = 0, n = views.length; i < n; ++i) {
+                var view = views[i];
+                view.array = new view.arrayType(buffer, view.offset, view.arrayLength);
             }
         }
-        block = {
+        var block = {
             offset: this.used,
             size: blockSize
         };
-        blocks.push(block);
+        this.blocks.push(block);
         this.used += blockSize;
         return block;
     },
@@ -1818,6 +1817,7 @@ utils.Memory = utils.extend(utils.Object, {
         block.arrayType = arrayType;
         block.arrayLength = length;
         block.array = new arrayType(this.memory.buffer, block.offset, length);
+        this.views.push(block);
         return block;
     }
 });
