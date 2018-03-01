@@ -63,7 +63,6 @@ GL.MeshDqs = utils.extend(utils.Object, {
             "MAX_VERTEX_TEXTURE_IMAGE_UNITS must be >= 5"
         );
 
-        var gl = context.gl;
         var defines = {
             ARRAY_CHUNK: this.ARRAY_CHUNK + 'u'
         };
@@ -155,8 +154,8 @@ GL.MeshDqs = utils.extend(utils.Object, {
         this.numVertices = numVertices;
 
         // unpack the vertices
-        this.coords = utils.arrayUnpack3f(mesh.vertices);
-        this.coordsInit = new Float32Array(this.coords);
+        this.coordsBase = utils.arrayUnpack3f(mesh.vertices);
+        this.boundsBase = utils.boundingBox(this.coordsBase);
 
         /*
          * aCoord attribute for the vertex's pre-transformed coordinates
@@ -167,8 +166,9 @@ GL.MeshDqs = utils.extend(utils.Object, {
         this.aCoord = GL.Buffer.create(this.context, {
             name: this.config.name + ".aCoord"
         });
-        this.aCoordUpdate ={
-            srcData: this.coords,
+        this.aCoordUpdate = {
+            srcData: this.coordsBase,
+            length: this.coordsBase.length,
             usage: gl.DYNAMIC_READ
         };
         this.aCoord.setData(this.aCoordUpdate);
@@ -208,7 +208,7 @@ GL.MeshDqs = utils.extend(utils.Object, {
         });
         this.vCoord.setData({
             size: uCoordsW * uCoordsH * 3 * 4,
-            usage: gl.DYNAMIC_READ
+            usage: gl.DYNAMIC_COPY
         });
         this.vCoordCopyBuffer = {
             buffer: this.vCoord
@@ -417,19 +417,20 @@ GL.MeshDqs = utils.extend(utils.Object, {
             var m = poly.length;
             if (m != 4) {
                 console.log(
-                    config.name,
+                    this.config.name,
                     "poly is not a quad",
                     i, poly
                 );
                 continue;
             }
+
             for (var j = 0; j < m; ++j) {
                 var v = poly[j];
                 var neighbors = neighborMap[v];
                 if (!neighbors) {
-                    neighborMap[v] = [poly];
+                    neighborMap[v] = [i];
                 } else {
-                    neighbors.push(poly);
+                    neighbors.push(i);
                 }
                 ++count;
             }
@@ -441,13 +442,14 @@ GL.MeshDqs = utils.extend(utils.Object, {
          *	..
          *	RGBA32UI(p0,p1,p2,p3) = uNeighbors[texUV(offset + count - 1)]
          */
+        n = this.numVertices;
         var uNeighborsW = this.ARRAY_CHUNK;
         var uNeighborsH = Math.ceil(count / this.ARRAY_CHUNK);
-        var indexBuf = new Uint32Array(this.numVertices * 2);
+        var indexBuf = new Uint32Array(n * 2);
         var neighborBuf = new Uint32Array(uNeighborsW * uNeighborsH * 4);
         var offset = 0;
-        var ii = 0, ni = 0;
-        for (i = 0, n = this.numVertices; i < n; ++i) {
+        var ii = 0, jj = 0;
+        for (i = 0; i < n; ++i) {
             var neighbors = neighborMap[i];
             var m = neighbors ? neighbors.length : 0;
             if (m == 0) {
@@ -457,11 +459,11 @@ GL.MeshDqs = utils.extend(utils.Object, {
             indexBuf[ii++] = m;
             offset += m;
             for (var j = 0; j < m; ++j) {
-                var poly = neighbors[j];
-                neighborBuf[ni++] = poly[0];
-                neighborBuf[ni++] = poly[1];
-                neighborBuf[ni++] = poly[2];
-                neighborBuf[ni++] = poly[3];
+                var poly = polygons[neighbors[j]];
+                neighborBuf[jj++] = poly[0];
+                neighborBuf[jj++] = poly[1];
+                neighborBuf[jj++] = poly[2];
+                neighborBuf[jj++] = poly[3];
             }
         }
         this.uNeighbors = GL.Texture.create(this.context, {
@@ -538,7 +540,7 @@ GL.MeshDqs = utils.extend(utils.Object, {
         });
         this.vNormal.setData({
             size: uNormalsW * uNormalsH * 3 * 4,
-            usage: gl.DYNAMIC_READ
+            usage: gl.DYNAMIC_COPY
         });
         this.vNormalCopyBuffer = {
             buffer: this.vNormal
@@ -694,8 +696,9 @@ GL.MeshDqs = utils.extend(utils.Object, {
     },
 
     animate: function(sampler, t) {
+        var coords = App.coordsBlock.array;
+        coords.set(this.coordsBase);
         this.controlBuf.set(this.controlInitBuf);
-        this.coords.set(this.coordsInit);
         sampler.output(t);
         var bones = this.bones;
         for (var i = 0, n = bones.length; i < n; ++i) {
@@ -703,6 +706,7 @@ GL.MeshDqs = utils.extend(utils.Object, {
         }
         this.boneTransformGlobal(this.config.mesh.figure);
         this.uBones.setData(this.uBonesUpdate);
+        this.aCoordUpdate.srcData = coords;
         this.aCoord.setData(this.aCoordUpdate);
     },
 

@@ -287,9 +287,11 @@ utils.arrayMin = function(ary, offset, stride, count) {
 /**
  * Unpack [[u, v], ...] into [u, v, ...].
  */
-utils.arrayUnpack2f = function(vec) {
+utils.arrayUnpack2f = function(vec, unpacked) {
     var n = vec.length;
-    var unpacked = new Float32Array(n * 2);
+    if (!unpacked) {
+        unpacked = new Float32Array(n * 2);
+    }
     for (var i = 0, j = 0; i < n; ++i) {
 	var rec = vec[i];
 	unpacked[j++] = rec[0];
@@ -301,9 +303,11 @@ utils.arrayUnpack2f = function(vec) {
 /**
  * Unpack [[x, y, z], ...] into [x, y, z, ...].
  */
-utils.arrayUnpack3f = function(vec) {
+utils.arrayUnpack3f = function(vec, unpacked) {
     var n = vec.length;
-    var unpacked = new Float32Array(n * 3);
+    if (!unpacked) {
+        unpacked = new Float32Array(n * 3);
+    }
     for (var i = 0, j = 0; i < n; ++i) {
 	var rec = vec[i];
 	unpacked[j++] = rec[0];
@@ -1364,11 +1368,10 @@ utils.AssetFetch = utils.extend(utils.Asset, {
     },
 
     loadEvent: function(response) {
-        console.log("loadEvent", response);
         if (this.statusCheck(response)) {
             utils.debug && console.log(
                 "loaded " + this.config.url
-	    );
+            );
             if (this.process(response)) {
                 this.ready();
             }
@@ -1747,3 +1750,74 @@ utils.spline_tcb = function(x, knots) {
     }
     return kn[1];
 };
+
+/**
+ * Memory manager for a WebAssembly.Memory instance.
+ * TBD: need a way to free memory.
+ * @note assume host is little endian
+ */
+utils.Memory = utils.extend(utils.Object, {
+    init: function(config) {
+        this.config = config;
+        if (config) {
+            this.memory = config.config;
+        }
+        if (!this.memory) {
+            var memoryConfig = {
+                initial: config && config.initial || 1
+            };
+            if (config && config.maximum) {
+                memoryConfig.maximum = config.maximum;
+            }
+            this.memory = new WebAssembly.Memory(memoryConfig);
+        }
+        this.dataView = new DataView(this.memory.buffer);
+        this.blocks = [];
+        this.used = 0;
+    },
+
+    malloc: function(size) {
+        var blocks = this.blocks, block;
+        var avail = this.memory.buffer.byteLength - this.used;
+        var blockSize = size;
+        var padding = size % 8;
+        if (padding > 0) {
+            blockSize += 8 - padding;
+        }
+
+        if (blockSize > avail) {
+            var pages = Math.ceil((blockSize - avail) / 0x10000);
+            var initial = this.config && this.config.initial || 1;
+            if (pages < initial) {
+                pages = initial;
+            }
+            utils.debug && console.log("grow", pages);
+            this.memory.grow(pages);
+
+            /* rebuild the data and typed array views */
+            this.dataView = new DataView(this.memory.buffer);
+            var buffer = this.memory.buffer;
+            for (var i = 0, n = blocks.length; i < n; ++i) {
+                block = blocks[i];
+                if (block.arrayType) {
+                    block.array = new block.arrayType(buffer, block.offset, block.arrayLength);
+                }
+            }
+        }
+        block = {
+            offset: this.used,
+            size: blockSize
+        };
+        blocks.push(block);
+        this.used += blockSize;
+        return block;
+    },
+
+    arrayNew: function(arrayType, length) {
+        var block = this.malloc(length * arrayType.BYTES_PER_ELEMENT);
+        block.arrayType = arrayType;
+        block.arrayLength = length;
+        block.array = new arrayType(this.memory.buffer, block.offset, length);
+        return block;
+    }
+});

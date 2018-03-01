@@ -1,4 +1,5 @@
-utils.debug = 3;
+//utils.debug = 3;
+utils.debug = 0;
 
 var App = utils.extend(utils.WebVR, {
     VR_ENABLE: true,
@@ -16,9 +17,20 @@ var App = utils.extend(utils.WebVR, {
         this.transformTimer = utils.EMA.create(utils.EMA.alphaN(100));
         this.normalsTimer = utils.EMA.create(utils.EMA.alphaN(100));
         this.drawTimer = utils.EMA.create(utils.EMA.alphaN(100));
+        this.memory = utils.Memory.create({
+            initial: 16
+        });
 
         GL.MeshDqs.initAssets(this.context, this.loader);
         var assets = {
+            meshMorph: utils.AssetWasm.create({
+                url: "wasm/mesh-morph.wasm",
+                importObject: {
+                    js: {
+                        mem: this.memory.memory
+                    }
+                }
+            }),
             figure: utils.AssetFigure.create({
                 url: "lib/models/Victoria 7/model.json",
                 scripts: [
@@ -36,13 +48,29 @@ var App = utils.extend(utils.WebVR, {
                 ],
                 loadImages: false
             }),
-            clothes: utils.AssetFigure.create({
+            dress: utils.AssetFigure.create({
                 url: "lib/models/HY MiniDress for V7/model.json",
                 scripts: [
                     "lib/js/mods-hongyu-minidress-v7.js"
                 ],
                 loadImages: false
             })
+/*
+            shirt: utils.AssetFigure.create({
+                url: "lib/models/Hongyu Bikini 2 Bra/model.json",
+                scripts: [
+                    "lib/js/mods-bikini-bra.js"
+                ],
+                loadImages: false
+            }),
+            pants: utils.AssetFigure.create({
+                url: "lib/models/Hongyu Bikini 2 Pan/model.json",
+                scripts: [
+                    "lib/js/mods-bikini-pan.js"
+                ],
+                loadImages: false
+            })
+*/
         };
         this.poses = [
             { name: "walk",
@@ -51,6 +79,8 @@ var App = utils.extend(utils.WebVR, {
               url: "lib/poses/anim-run-inplace.json" },
             { name: "shoulder shimmy",
               url: "lib/poses/anim-bellydance-shoulder-shimmy-v7.json" },
+            { name: "ungelation",
+              url: "lib/poses/anim-bellydance-ungelation-v7.json" },
             { name: "black ice 1",
               url: "lib/poses/anim-ma-black-ice-1-v7.json" }
 /*
@@ -76,11 +106,12 @@ var App = utils.extend(utils.WebVR, {
         var context = this.context;
         var gl = context.gl;
 
+        this.meshMorph = this.loader.cache.meshMorph.instance;
+
         GL.MeshDqs.readyAssets(this.context, this.loader);
 
         this.figure = this.loader.cache.figure.get();
         this.hair = this.loader.cache.hair.get();
-        this.clothes = this.loader.cache.clothes.get();
 
         this.figureMesh = GL.MeshDqs.create(this.context, {
             name: "figure",
@@ -97,13 +128,33 @@ var App = utils.extend(utils.WebVR, {
             this.meshes.push(this.hairMesh);
         }
         if (true) {
-            this.clothesMesh = GL.MeshDqs.create(this.context, {
-                name: "clothes",
-                mesh: this.clothes
-            });
-            this.clothesMesh.ENABLE = true;
-            this.meshes.push(this.clothesMesh);
+            var clothing = [
+                'dress'
+                //'shirt', 'pants'
+            ];
+            this.clothingMeshes = [];
+            for (var i = 0, n = clothing.length; i < n; ++i) {
+                var name = clothing[i];
+                var mesh = GL.MeshDqs.create(this.context, {
+                    name: name,
+                    mesh: this.loader.cache[name].get()
+                });
+                mesh.ENABLE = true;
+                this.meshes.push(mesh);
+                this.clothingMeshes.push(mesh);
+            }
         }
+
+        /* allocate a Wasm memory block for holding a coords array */
+        var maxVertices = 0;
+        for (var i = 0, n = this.meshes.length; i < n; ++i) {
+            var mesh = this.meshes[i];
+            if (maxVertices < mesh.numVertices) {
+                maxVertices = mesh.numVertices;
+            }
+        }
+        this.coordsBlock = this.memory.arrayNew(Float32Array, maxVertices * 3);
+
         /*
          * TBD: why do I get this error?
          *	Error: WebGL warning: drawElements: Driver rejected indexed draw call, possibly due to out-of-bounds indices.
@@ -115,7 +166,8 @@ var App = utils.extend(utils.WebVR, {
             return a.numIndices - b.numIndices;
         });
 
-        var bounds = utils.boundingBox(this.figureMesh.coords);
+
+        var bounds = this.figureMesh.boundsBase;
         console.log("bounds", bounds);
 
         this.mMatrix = mat4.create();
@@ -301,12 +353,9 @@ var App = utils.extend(utils.WebVR, {
     },
 
     uiClothesEnableCreate: function(elements) {
-        if (!this.clothesMesh) {
-            return;
-        }
         this.uiClothesEnable = document.createElement('input');
         this.uiClothesEnable.type = 'checkbox';
-        this.uiClothesEnable.checked = this.clothesMesh.ENABLE;
+        this.uiClothesEnable.checked = true;
         utils.on(
             this.uiClothesEnable, 'click',
             this.uiClothesEnableClick, this
@@ -319,10 +368,13 @@ var App = utils.extend(utils.WebVR, {
         });
     },
     uiClothesEnableClick: function() {
-        this.clothesMesh.ENABLE = this.uiClothesEnable.checked;
-        if (this.clothesMesh.ENABLE) {
-            this.clothesMesh.anim.t = this.figureMesh.anim.t;
-            this.animResync = true;
+        for (var i = 0, n = this.clothingMeshes.length; i < n; ++i) {
+            var mesh = this.clothingMeshes[i];
+            mesh.ENABLE = this.uiClothesEnable.checked;
+            if (mesh.ENABLE) {
+                mesh.anim.t = this.figureMesh.anim.t;
+                this.animResync = true;
+            }
         }
     },
 
@@ -341,13 +393,12 @@ var App = utils.extend(utils.WebVR, {
     uiAnimSpeedInput: function() {
         var value = parseFloat(this.uiAnimSpeed.value);
         this.ANIMATION_SPEED = value;
-        var text;
-        if (value == 0) {
-            text = "Animation Off";
-        } else {
-            text = "Animation " + value.toFixed(1) + "\u00d7";
-        }
-        utils.contentText(this.uiAnimSpeedLabel, text);
+        utils.contentText(
+            this.uiAnimSpeedLabel,
+            (value == 0
+             ? "Animation Off"
+             : "Animation " + value.toFixed(1) + "\u00d7")
+        );
     },
 
     uiRotationCreate: function(elements) {

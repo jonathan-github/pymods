@@ -184,9 +184,9 @@ utils.KeyFrameQuatSampler = utils.extend(utils.KeyFrameSampler, {
 
     interpolate: function(a, b, s) {
         var q = this.q;
-        //quat.slerp(q, a, b, s);
-        quat.lerp(q, a, b, s);
-        quat.normalize(q, q);
+        quat.slerp(q, a, b, s);
+        //quat.lerp(q, a, b, s);
+        //quat.normalize(q, q);
         return q;
     },
 
@@ -313,7 +313,8 @@ utils.KeyFrameMapSampler = utils.extend(utils.Object, {
                 }
                 keys.push([t, value]);
                 if (!morphMap[id]) {
-                    morphMap[id] = morph.values;
+                    //morphMap[id] = morph.values;
+                    morphMap[id] = this.morphUnpack(morph);
                 }
             }
 
@@ -387,6 +388,36 @@ utils.KeyFrameMapSampler = utils.extend(utils.Object, {
         this.duration = duration;
     },
 
+    morphUnpack: function(morph) {
+        var block = morph.block;
+        if (!block) {
+            /* unpack the morph into Wasm memory */
+            console.assert(
+                morph.count == morph.values.length,
+                "morph.count == morph.values.length",
+                morph
+            );
+            var values = morph.values;
+            var n = morph.count;
+            block = App.memory.malloc(n * 16);
+            var dv = App.memory.dataView;
+            var offset = block.offset;
+            for (var i = 0; i < n; ++i) {
+                var rec = values[i];
+                dv.setInt32(offset, rec[0], true); offset += 4;
+                dv.setFloat32(offset, rec[1], true); offset += 4;
+                dv.setFloat32(offset, rec[2], true); offset += 4;
+                dv.setFloat32(offset, rec[3], true); offset += 4;
+            }
+            morph.block = block;
+            morph.values = null; // no longer needed
+        }
+        return {
+            offset: block.offset,
+            count: morph.count
+        };
+    },
+
     init: function(keyMap, mesh, basePose) {
         this.keysBuild(keyMap, mesh, basePose);
     },
@@ -420,7 +451,8 @@ utils.KeyFrameMapSampler = utils.extend(utils.Object, {
 
         this.outputBones(t);
         if (App.MORPHS_ENABLE) {
-            this.outputMorphs(t);
+            //this.outputMorphs(t);
+            this.outputMorphsWasm(t);
         }
     },
 
@@ -454,6 +486,24 @@ utils.KeyFrameMapSampler = utils.extend(utils.Object, {
                 coords[ci++] += value * d[2];
                 coords[ci]   += value * d[3];
             }
+        }
+    },
+    /*
+     * use Wasm to apply the morph
+     */
+    outputMorphsWasm: function(t) {
+        var coords = App.coordsBlock.offset;
+        var morphMap = this.morphMap;
+        var morphSamplers = this.morphSamplers;
+        var meshMorph = App.meshMorph.exports.meshMorph;
+        for (var i = 0, n = morphSamplers.length; i < n; ++i) {
+            var rec = morphSamplers[i];
+            var value = rec[1].sample(t);
+            if (value == 0) {
+                continue;
+            }
+            var morph = morphMap[rec[0]];
+            meshMorph(coords, morph.offset, morph.count, value);
         }
     }
 });
