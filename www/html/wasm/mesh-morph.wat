@@ -1,6 +1,6 @@
 (module
  ;; memory usage:
- ;;	coords: {x: f32, y: f32, z: f32}[num_vertices * 3]
+ ;;	coords: {x: f32, y: f32, z: f32}[num_vertices]
  ;;	morph: {vi: i32, dx: f32, dy: f32, dz: f32}[count]
  (memory (import "js" "mem") 1)
 
@@ -8,10 +8,10 @@
  (func $meshMorph (export "meshMorph")
  
   ;; the coords array address
-  ;;	coords: {x: f32, y: f32, z: f32}[num_vertices * 3]
+  ;;	coords: {x: f32, y: f32, z: f32}[num_vertices]
   (param $coords i32)
 
-  ;; the moprh data address
+  ;; the morph data address
   ;;	morph: {vi: i32, dx: f32, dy: f32, dz: f32}[count]
   (param $morph i32)
 
