@@ -1717,7 +1717,7 @@ GL.Material = utils.extend(utils.Object, {
         if (this.bumpTextureUniform && App.BUMP_MAP_ENABLE) {
             program.uniforms.uHasBumpTexture.set(true);
             program.uniforms.uBumpTexture.set(this.bumpTextureUniform);
-            program.uniforms.uBumpStrength.set(this.bumpStrength * 0.01);
+            program.uniforms.uBumpStrength.set(this.bumpStrength * 0.1);
         } else {
             // TBD: need dummy texture
             program.uniforms.uHasBumpTexture.set(false);

@@ -99,7 +99,7 @@ void main() {
 		texScale += length(vec2(duv[2], duv[3])) / length(d2);
 	}
 
-	vTexScale = texScale / 2.0 * float(count);
+	vTexScale = texScale / (2.0 * float(count));
 
 	// fetch the vertex normal
 	vec3 normal = texelFetch(uNormals, texUV(vi), 0).xyz;

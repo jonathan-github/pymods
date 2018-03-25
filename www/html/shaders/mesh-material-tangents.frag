@@ -96,7 +96,7 @@ void main() {
 			float dt = 1.0 / float(textureSize(uBumpTexture, 0).s);
 			float scale = uBumpStrength * vTexScale;
 			vec3 bn = bumpNormal(dt, scale);
-			tn = normalize(mix(tn, bn, 0.2));
+			tn = normalize(mix(tn, bn, 0.25));
 		}
 		normal = normalize(tm * tn);
 	}
