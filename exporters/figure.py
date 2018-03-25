@@ -10,19 +10,17 @@ import dson.utils
 """mesh = {
     "type": "subdivision_surface",
     "vertices": [[x, y, z], ...],
-    "polygons": [[v1, v2, v3, ...], ...],
+    "polygons": [[v0, v1, v2, v3], ...],
     "polygon_groups": [
         {"id": "group_id",
-         "polylist": [polylist_index, ...],
-         "uv_set": uv_set_index,
-         "uvs": [uvs_index, ...]},
+         "polygon": [polylist_index, ...]},
         ...
     ],
     "polygon_material_groups": [
         {"id": "material_id",
-         "polylist": [polylist_index, ...]
-         "material": "material_id",
-         "uvs": [uv_index, ...]},
+         "material": material_index,
+         "polygons": [polylist_index, ...]
+         "uvs": [[uv0, uv1, uv2, uv3], ...]},
         ...
     ],
     "figure": {
