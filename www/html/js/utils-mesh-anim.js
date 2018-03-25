@@ -158,6 +158,7 @@ utils.KeyFrameSampler = utils.extend(utils.Object, {
 
 /**
  * Quarternion key frame sampler.
+ * Converts the rotation X,Y,Z key frames into quarternion key frames.
  */
 utils.KeyFrameQuatSampler = utils.extend(utils.KeyFrameSampler, {
     ZERO_KEY: quat.create(),
@@ -253,7 +254,9 @@ utils.KeyFrameMapSampler = utils.extend(utils.Object, {
         }
 
         /* apply the poses to get bone transforms and morphs */
-        var controller = utils.ModifierController.create(mesh.config.mesh.figure.id);
+        var controller = utils.ModifierController.create(
+            mesh.config.mesh.figure.id
+        );
         var propMap = {};
         var scalarMap = {};
         var morphMap = {};

@@ -46,8 +46,8 @@ layout(location = INDEX_LOCATION) in uvec2 aWeightIndex;
 out vec3 vCoord;
 
 void main() {
-	uint offset = uint(aWeightIndex.x);
-	uint count = uint(aWeightIndex.y);
+	uint offset = aWeightIndex.x;
+	uint count = aWeightIndex.y;
 
 	/* fetch the first weight map entry */
 	vec2 bw = texelFetch(uWeights, texUV(offset), 0).xy;

@@ -3,10 +3,13 @@ utils.debug = 0;
 
 var App = utils.extend(utils.WebVR, {
     VR_ENABLE: true,
+    TEXTURES_ENABLE: true,
+    AMBIENT_ENABLE: true,
+    SPECULAR_ENABLE: true,
+    TONE_MAP_ENABLE: true,
+    BUMP_MAP_ENABLE: true,
     MORPHS_ENABLE: true,
     ANIMATION_SPEED: 1,
-    ROTATION: 0,
-    ROTATION_SPEED: 0,
 
     initAssets: function() {
         var gl = this.gl;
@@ -14,15 +17,14 @@ var App = utils.extend(utils.WebVR, {
         this.overlay = utils.Overlay.create();
         this.renderTimer = utils.EMA.create(utils.EMA.alphaN(100));
         this.animateTimer = utils.EMA.create(utils.EMA.alphaN(100));
-        this.transformTimer = utils.EMA.create(utils.EMA.alphaN(100));
-        this.normalsTimer = utils.EMA.create(utils.EMA.alphaN(100));
+        this.constraintsTimer = utils.EMA.create(utils.EMA.alphaN(100));
         this.drawTimer = utils.EMA.create(utils.EMA.alphaN(100));
         this.memory = utils.Memory.create({
             initial: 16
         });
 
-        GL.MeshDqs.initAssets(this.context, this.loader);
-        var assets = {
+        GL.MeshDqs.initAssets(this.loader);
+        this.loader.batch({
             meshMorph: utils.AssetWasm.create({
                 url: "wasm/mesh-morph.wasm",
                 importObject: {
@@ -31,121 +33,75 @@ var App = utils.extend(utils.WebVR, {
                     }
                 }
             }),
-            figure: utils.AssetFigure.create({
-                url: "lib/models/Victoria 7/model.json",
-                scripts: [
-                    "lib/js/mods-g3f.js",
-                    "lib/js/mods-v7.js"
-                ],
-                loadImages: false
-            }),
-            hair: utils.AssetFigure.create({
-                url: "lib/models/Cordia Hair/model.json",
-                //url: "lib/models/Krayon Hair/model.json",
-                scripts: [
-                    "lib/js/mods-cordia.js"
-                    //"lib/js/mods-krayon.js"
-                ],
-                loadImages: false
-            }),
-            dress: utils.AssetFigure.create({
-                url: "lib/models/HY MiniDress for V7/model.json",
-                scripts: [
-                    "lib/js/mods-hongyu-minidress-v7.js"
-                ],
-                loadImages: false
+            assets: utils.AssetBatch.create({
+                url: "lib/assets/gl-assets.json"
             })
-/*
-            shirt: utils.AssetFigure.create({
-                url: "lib/models/Hongyu Bikini 2 Bra/model.json",
-                scripts: [
-                    "lib/js/mods-bikini-bra.js"
-                ],
-                loadImages: false
-            }),
-            pants: utils.AssetFigure.create({
-                url: "lib/models/Hongyu Bikini 2 Pan/model.json",
-                scripts: [
-                    "lib/js/mods-bikini-pan.js"
-                ],
-                loadImages: false
-            })
-*/
-        };
-        this.poses = [
-            { name: "walk",
-              url: "lib/poses/anim-walk-flat-inplace.json" },
-            { name: "run",
-              url: "lib/poses/anim-run-inplace.json" },
-            { name: "shoulder shimmy",
-              url: "lib/poses/anim-bellydance-shoulder-shimmy-v7.json" },
-            { name: "ungelation",
-              url: "lib/poses/anim-bellydance-ungelation-v7.json" },
-            { name: "black ice 1",
-              url: "lib/poses/anim-ma-black-ice-1-v7.json" }
-/*
-	    { name: "snake hips",
-              url: "lib/poses/anim-bellydance-standing-snake-hips-v7.json" },
-            { name: "barrel turn",
-              url: "lib/poses/anim-bellydance-barrel-turns-v7.json" },
-            { name: "idle A 1",
-              url: "lib/poses/anim-G3F Idle A 1.json" }
-*/
-        ];
-        for (var i = 0, n = this.poses.length; i < n; ++i) {
-            var url = this.poses[i].url;
-            assets[url] = utils.AssetRequest.create({
-                responseType: 'json',
-                url: url
-            });
-        }
-        this.loader.batch(assets);
+        });
     },
 
     readyAssets: function() {
         var context = this.context;
         var gl = context.gl;
 
+        GL.MeshDqs.readyAssets(this.loader);
+
+        this.library = {};
+        this.textureCache = {};
         this.meshMorph = this.loader.cache.meshMorph.instance;
 
-        GL.MeshDqs.readyAssets(this.context, this.loader);
-
-        this.figure = this.loader.cache.figure.get();
-        this.hair = this.loader.cache.hair.get();
-
-        this.figureMesh = GL.MeshDqs.create(this.context, {
+        var assets = this.loader.cache.assets.get();
+        var figure = assets.figure;
+        this.figureMesh = GL.MeshDqs.create({
             name: "figure",
-            mesh: this.figure
+            mesh: figure.get(this.library),
+            meshUniforms: figure.config.meshUniforms,
+            materialUniforms: figure.config.materialUniforms
         });
         this.figureMesh.ENABLE = true;
+        this.figureMesh.uColorMode = 1;
         this.meshes = [this.figureMesh];
-        if (true) {
-            this.hairMesh = GL.MeshDqs.create(this.context, {
+
+        var hair = assets.hair;
+        if (hair) {
+            this.hairMesh = GL.MeshDqs.create({
                 name: "hair",
-                mesh: this.hair
+                mesh: hair.get(this.library),
+                meshUniforms: hair.config.meshUniforms,
+                materialUniforms: hair.config.materialUniforms
             });
             this.hairMesh.ENABLE = true;
+            this.hairMesh.parent = this.figureMesh;
             this.meshes.push(this.hairMesh);
         }
-        if (true) {
-            var clothing = [
-                'dress'
-                //'shirt', 'pants'
-            ];
-            this.clothingMeshes = [];
-            for (var i = 0, n = clothing.length; i < n; ++i) {
-                var name = clothing[i];
-                var mesh = GL.MeshDqs.create(this.context, {
-                    name: name,
-                    mesh: this.loader.cache[name].get()
-                });
-                mesh.ENABLE = true;
-                this.meshes.push(mesh);
-                this.clothingMeshes.push(mesh);
+
+        var clothing = [
+            'dress',
+            'shirt', 'pants'
+        ];
+        this.clothingMeshes = [];
+        for (var i = 0, n = clothing.length; i < n; ++i) {
+            var name = clothing[i];
+            var asset = assets[name];
+            if (!asset) {
+                continue;
             }
+            var item = GL.MeshDqs.create({
+                name: name,
+                mesh: asset.get(this.library),
+                meshUniforms: asset.config.meshUniforms,
+                materialUniforms: asset.config.materialUniforms
+            });
+            item.ENABLE = true;
+            item.parent = this.figureMesh;
+            var fit = assets[name + 'Fit'];
+            if (fit) {
+                item.initFit(fit.responseJSON());
+            }
+            this.meshes.push(item);
+            this.clothingMeshes.push(item);
         }
 
-        /* allocate a Wasm memory block for holding a coords array */
+        /* allocate a Wasm memory block for a mesh coords array */
         var maxVertices = 0;
         for (var i = 0, n = this.meshes.length; i < n; ++i) {
             var mesh = this.meshes[i];
@@ -155,50 +111,50 @@ var App = utils.extend(utils.WebVR, {
         }
         this.coordsBlock = this.memory.arrayNew(Float32Array, maxVertices * 3);
 
-        /*
-         * TBD: why do I get this error?
-         *	Error: WebGL warning: drawElements: Driver rejected indexed draw call, possibly due to out-of-bounds indices.
-         *
-         * Workaround seems to be to draw meshes in increasing
-         * ELEMENT_ARRAY_BUFFER size.
-         */
-        this.meshes.sort(function(a, b) {
-            return a.numIndices - b.numIndices;
-        });
-
-
         var bounds = this.figureMesh.boundsBase;
         console.log("bounds", bounds);
+        this.toOrigin = vec3.fromValues(
+            (bounds.xmin + bounds.xmax) / 2,
+            (bounds.ymin + bounds.ymax) / 2,
+            (bounds.zmin + bounds.zmax) / 2
+        );
+        this.elevationMax = bounds.ymax - bounds.ymin;
+        this.fromOrigin = vec3.fromValues(
+            -this.toOrigin[0],
+            -this.toOrigin[1],
+            -this.toOrigin[2]
+        );
+
+        this.blackColor = vec3.fromValues(0.0, 0.0, 0.0);
+        this.whiteColor = vec3.fromValues(1.0, 1.0, 1.0);
+        this.ambientColor = vec3.fromValues(0.2, 0.2, 0.2);
+        this.lightColor = vec3.fromValues(0.6, 0.6, 0.6);
+        this.lightDirection = vec3.fromValues(0.85, 0.8, 0.75);
+        vec3.normalize(this.lightDirection, this.lightDirection);
 
         this.mMatrix = mat4.create();
         var scale = 1.55 / bounds.ymax;
         mat4.scale(this.mMatrix, this.mMatrix, [ scale, scale, scale ]);
+        this.mMatrixBase = mat4.clone(this.mMatrix);
+        this.figureMesh.mMatrix = this.mMatrix;
 
         this.vMatrix = mat4.create();
         this.vMatrixVR = mat4.create();
         // full
         mat4.translate(this.vMatrix, this.vMatrix, [0, -0.75, -2.2]);
         // face
-        //mat4.translate(this.vMatrix, this.vMatrix, [0, -1.5, -0.5]);
+        //mat4.translate(this.vMatrix, this.vMatrix, [0, -1.45, -0.3]);
 
         this.pMatrix = mat4.create();
 
-        this.programs = [
-            GL.MeshDqs.normalsDebugProgram
-        ];
-        for (var i = 0, n = this.programs.length; i < n; ++i) {
-            var program = this.programs[i];
-            if (program.uniforms.mMatrix) {
-                program.uniforms.mMatrix.set(this.mMatrix);
-            }
-            if (program.uniforms.vMatrix) {
-                program.uniforms.vMatrix.set(this.vMatrix);
-            }
-        }
-
-        for (var i = 0, n = this.poses.length; i < n; ++i) {
-            var pose = this.poses[i];
-            pose.keyFrames = this.loader.cache[pose.url].responseJSON();
+        this.poses = [];
+        var poses = assets.poses;
+        for (i = 0, n = poses.length; i < n; ++i) {
+            var pose = poses[i];
+            this.poses.push({
+                name: pose.config.name,
+                keyFrames: pose.responseJSON()
+            });
         }
         this.poseSelect(this.poses[0]);
 
@@ -206,7 +162,36 @@ var App = utils.extend(utils.WebVR, {
         this.reportFrame = 0;
         this.reportTime = self.performance.now();
         this.uiCreate();
+
+        /* release the library and texture cache (only needed during loading) */
+        this.library = null;
+        this.textureCache = null;
     },
+
+    textureGet: function(image, config) {
+        var texture = this.textureCache[image.url];
+        if (texture) {
+            return texture;
+        }
+        var asset = this.library.images[image.url];
+        if (!asset) {
+            return null;
+        }
+        texture = GL.Texture.create({
+            name: image.url
+        });
+        if (!config) {
+            config = {
+                flipY: true,
+                mipMaps: true
+            };
+        }
+        config.source = asset.image;
+        texture.setImage(config);
+        this.textureCache[image.url] = texture;
+        return texture;
+    },
+
     poseSelect: function(pose) {
         if (this.pose == pose) {
             return;
@@ -215,7 +200,9 @@ var App = utils.extend(utils.WebVR, {
 
         var basePose = {
             CTRLVictoria7: 0.65,
+            FHMKaren7: 1.0,
             PBMBreastsSize: 0.25,
+            PBMNipples: 0.5,
             PBMNavel: 1.0,
             FBMVoluptuous: 0.30
         };
@@ -238,6 +225,20 @@ var App = utils.extend(utils.WebVR, {
     },
 
     uiCreate: function() {
+        this.pitch = 0;
+        this.yaw = 0;
+        this.scale = 1;
+        this.elevation = vec3.create();
+	utils.listeners(document, {
+	    mousedown: this.mouseDownEvent,
+	    mousemove: this.mouseMoveEvent,
+	    mouseup: this.mouseUpEvent,
+	    mouseover: this.mouseOverEvent,
+	    mouseout: this.mouseOutEvent,
+	    wheel: this.wheelEvent,
+	    scope: this
+	});
+
         this.uiDiv = document.createElement('div');
         utils.styleSet(this.uiDiv, {
             position: 'fixed',
@@ -250,12 +251,18 @@ var App = utils.extend(utils.WebVR, {
 
         var elements = [];
         this.uiPoseCreate(elements);
+        this.uiTexturesEnableCreate(elements);
+        this.uiAmbientEnableCreate(elements);
+        this.uiSpecularEnableCreate(elements);
+        this.uiToneMapEnableCreate(elements);
+        this.uiBumpMapEnableCreate(elements);
         this.uiMorphsEnableCreate(elements);
         this.uiHairEnableCreate(elements);
-        this.uiClothesEnableCreate(elements);
+        if (this.clothingMeshes && this.clothingMeshes.length > 0) {
+            this.uiClothesEnableCreate(elements);
+            this.uiConstraintsEnableCreate(elements);
+        }
         this.uiAnimSpeedCreate(elements);
-        true && this.uiRotationCreate(elements);
-        false && this.uiRotationSpeedCreate(elements);
 
         var tb = utils.TableBuilder.create();
         tb.sectionAdd('thead');
@@ -307,6 +314,86 @@ var App = utils.extend(utils.WebVR, {
         var idx = parseInt(this.uiPoseSelect.value);
         this.poseSelect(this.poses[idx]);
         this.animResync = true;
+    },
+
+    uiTexturesEnableCreate: function(elements) {
+        this.uiTexturesEnable = document.createElement('input');
+        this.uiTexturesEnable.type = 'checkbox';
+        this.uiTexturesEnable.checked = this.TEXTURES_ENABLE;
+        utils.on(this.uiTexturesEnable, 'click', this.uiTexturesEnableClick, this);
+        elements.push({
+                label: "Textures",
+                padding: '2px',
+                align: 'center',
+                ui: this.uiTexturesEnable
+        });
+    },
+    uiTexturesEnableClick: function() {
+        this.TEXTURES_ENABLE = this.uiTexturesEnable.checked;
+    },
+
+    uiAmbientEnableCreate: function(elements) {
+        this.uiAmbientEnable = document.createElement('input');
+        this.uiAmbientEnable.type = 'checkbox';
+        this.uiAmbientEnable.checked = this.AMBIENT_ENABLE;
+        utils.on(this.uiAmbientEnable, 'click', this.uiAmbientEnableClick, this);
+        elements.push({
+                label: "Ambient",
+                padding: '2px',
+                align: 'center',
+                ui: this.uiAmbientEnable
+        });
+    },
+    uiAmbientEnableClick: function() {
+        this.AMBIENT_ENABLE = this.uiAmbientEnable.checked;
+    },
+
+    uiSpecularEnableCreate: function(elements) {
+        this.uiSpecularEnable = document.createElement('input');
+        this.uiSpecularEnable.type = 'checkbox';
+        this.uiSpecularEnable.checked = this.SPECULAR_ENABLE;
+        utils.on(this.uiSpecularEnable, 'click', this.uiSpecularEnableClick, this);
+        elements.push({
+                label: "Specular",
+                padding: '2px',
+                align: 'center',
+                ui: this.uiSpecularEnable
+        });
+    },
+    uiSpecularEnableClick: function() {
+        this.SPECULAR_ENABLE = this.uiSpecularEnable.checked;
+    },
+
+    uiToneMapEnableCreate: function(elements) {
+        this.uiToneMapEnable = document.createElement('input');
+        this.uiToneMapEnable.type = 'checkbox';
+        this.uiToneMapEnable.checked = this.TONE_MAP_ENABLE;
+        utils.on(this.uiToneMapEnable, 'click', this.uiToneMapEnableClick, this);
+        elements.push({
+                label: "ToneMap",
+                padding: '2px',
+                align: 'center',
+                ui: this.uiToneMapEnable
+        });
+    },
+    uiToneMapEnableClick: function() {
+        this.TONE_MAP_ENABLE = this.uiToneMapEnable.checked;
+    },
+
+    uiBumpMapEnableCreate: function(elements) {
+        this.uiBumpMapEnable = document.createElement('input');
+        this.uiBumpMapEnable.type = 'checkbox';
+        this.uiBumpMapEnable.checked = this.BUMP_MAP_ENABLE;
+        utils.on(this.uiBumpMapEnable, 'click', this.uiBumpMapEnableClick, this);
+        elements.push({
+                label: "BumpMap",
+                padding: '2px',
+                align: 'center',
+                ui: this.uiBumpMapEnable
+        });
+    },
+    uiBumpMapEnableClick: function() {
+        this.BUMP_MAP_ENABLE = this.uiBumpMapEnable.checked;
     },
 
     uiMorphsEnableCreate: function(elements) {
@@ -378,6 +465,25 @@ var App = utils.extend(utils.WebVR, {
         }
     },
 
+    uiConstraintsEnableCreate: function(elements) {
+        this.uiConstraintsEnable = document.createElement('input');
+        this.uiConstraintsEnable.type = 'checkbox';
+        this.uiConstraintsEnable.checked = false;
+        utils.on(
+            this.uiConstraintsEnable, 'click',
+            this.uiConstraintsEnableClick, this
+        );
+        elements.push({
+                label: "Constraints",
+                padding: '2px',
+                align: 'center',
+                ui: this.uiConstraintsEnable
+        });
+    },
+    uiConstraintsEnableClick: function() {
+        this.animResync = true;
+    },
+
     uiAnimSpeedCreate: function(elements) {
         this.uiAnimSpeedLabel = document.createElement('span');
         utils.contentText(this.uiAnimSpeedLabel, "Animation Speed");
@@ -393,6 +499,7 @@ var App = utils.extend(utils.WebVR, {
     uiAnimSpeedInput: function() {
         var value = parseFloat(this.uiAnimSpeed.value);
         this.ANIMATION_SPEED = value;
+        this.animResync = true;
         utils.contentText(
             this.uiAnimSpeedLabel,
             (value == 0
@@ -401,40 +508,102 @@ var App = utils.extend(utils.WebVR, {
         );
     },
 
-    uiRotationCreate: function(elements) {
-        this.uiRotationLabel = document.createElement('span');
-        utils.contentText(this.uiRotationLabel, "Rotation");
-        this.uiRotation = document.createElement('input');
-        this.uiRotation.type = 'range';
-        this.uiRotation.min = '-180';
-        this.uiRotation.max = '180';
-        this.uiRotation.step = '1';
-        this.uiRotation.value = this.ROTATION.toString();
-        utils.on(this.uiRotation, 'input', this.uiRotationInput, this);
-        elements.push({label: this.uiRotationLabel, ui: this.uiRotation});
+    dragStart: function(x, y) {
+	this.mouseDrag = {
+	    x: x,
+	    y: y
+	};
     },
-    uiRotationInput: function() {
-        var value = parseFloat(this.uiRotation.value);
-        this.ROTATION = value;
-        utils.contentText(
-            this.uiRotationLabel,
-            "Rotation " + value.toFixed(0) + "\u00b0"
-        );
+    dragMove: function(x, y, constrain) {
+	var drag = this.mouseDrag;
+	if (drag) {
+	    var dx = drag.x - x;
+	    var dy = drag.y - y;
+	    drag.x = x;
+	    drag.y = y;
+
+	    if (constrain) {
+		if (Math.abs(dx) > Math.abs(dy)) {
+		    dy = 0;
+		} else {
+		    dx = 0;
+		}
+	    }
+
+	    var gl = this.context.gl;
+	    var d = Math.min(gl.drawingBufferWidth, gl.drawingBufferHeight);
+	    var scale = 360 / d;
+	    var pitch = this.pitch - dy * scale;
+            if (pitch < -180) {
+                pitch = -180;
+            } else if (pitch > 180) {
+                pitch = 180;
+            }
+	    var yaw = this.yaw - dx * scale;
+            while (yaw > 180) {
+                yaw -= 360;
+            }
+            while (yaw < -180) {
+                yaw += 360;
+            }
+            this.pitch = pitch;
+            this.yaw = yaw;
+            this.animResync = true;
+	}
+    },
+    dragStop: function() {
+	this.mouseDrag = null;
     },
 
-    uiRotationSpeedCreate: function(elements) {
-        this.uiRotationSpeed = document.createElement('input');
-        this.uiRotationSpeed.type = 'range';
-        this.uiRotationSpeed.min = '0';
-        this.uiRotationSpeed.max = '60';
-        this.uiRotationSpeed.step = '1';
-        this.uiRotationSpeed.value = this.ROTATION_SPEED.toString();
-        utils.on(this.uiRotationSpeed, 'input', this.uiRotationSpeedInput, this);
-        elements.push({label: "Rotation Speed", ui: this.uiRotationSpeed});
+    mouseDownEvent: function(event) {
+        if (event.target != this.canvas) {
+            /* ignore if not the canvas */
+            return;
+        }
+	if (event.buttons & 1) {
+	    this.dragStart(event.clientX, event.clientY);
+	}
     },
-    uiRotationSpeedInput: function() {
-        var value = parseFloat(this.uiRotationSpeed.value);
-        this.ROTATION_SPEED = value;
+    mouseMoveEvent: function(event) {
+	if (this.mouseDrag) {
+	    this.dragMove(event.clientX, event.clientY, event.shiftKey);
+	}
+    },
+    mouseUpEvent: function(event) {
+	this.dragStop();
+    },
+    mouseOverEvent: function(event) {
+	if (event.buttons & 1) {
+	    this.dragStart(event.clientX, event.clientY);
+	}
+    },
+    mouseOutEvent: function(event) {
+	this.dragStop();
+    },
+
+    wheelEvent: function(event) {
+        if (event.shiftKey) {
+            /* change elevation */
+            var elevationMax = this.elevationMax;
+            var elevation= this.elevation[1] + (event.deltaY < 0 ? 3 : -3);
+            if (elevation < -elevationMax) {
+                elevation = -elevationMax;
+            }
+            if (elevation > elevationMax) {
+                elevation = elevationMax;
+            }
+            this.elevation[1] = elevation;
+        } else {
+            /* change scale */
+            var scale = this.scale + (event.deltaY < 0 ? -1 : 1) * 0.05;
+            if (scale < 0.75) {
+                scale = 0.75;
+            } else if (scale > 10) {
+                scale = 10;
+            }
+            this.scale = scale;
+        }
+        this.animResync = true;
     },
 
     resize: function() {
@@ -450,8 +619,8 @@ var App = utils.extend(utils.WebVR, {
             10000
         );
 
-        for (var i = 0, n = this.programs.length; i < n; ++i) {
-            var program = this.programs[i];
+        for (var i = 0, n = GL.MeshDqs.programs.length; i < n; ++i) {
+            var program = GL.MeshDqs.programs[i];
             if (program.uniforms.pMatrix) {
                 program.uniforms.pMatrix.set(this.pMatrix).dirty = true;
             }
@@ -463,6 +632,9 @@ var App = utils.extend(utils.WebVR, {
             return;
         }
 
+        var animResync = this.animResync;
+        this.animResync = false;
+
         /* compute seconds elapsed since last call */
         var dt = 0;
         var last = this.animateLast;
@@ -471,9 +643,7 @@ var App = utils.extend(utils.WebVR, {
         }
         this.animateLast = t;
 
-        if (this.ANIMATION_SPEED != 0 || this.animResync) {
-            this.animResync = false;
-
+        if (animResync || this.ANIMATION_SPEED > 0) {
             var at = this.animateTime;
             if (at == undefined) {
                 at = this.animateTime = 0;
@@ -490,45 +660,32 @@ var App = utils.extend(utils.WebVR, {
             }
         }
 
-        var rotateY = this.ROTATION;
-        if (this.ROTATION_SPEED != 0) {
-            var rt = this.rotateTime;
-            if (rt == undefined) {
-                rt = this.rotateTime = 0;
-            } else {
-                /* advance the rotation timestamp */
-                rt += dt * this.ROTATION_SPEED;
-                this.rotateTime = rt;
-            }
-            rotateY = (rt * 360/60) % 360; // 360deg/60sec = 1 RPM
-        }
-
-        if (this.rotateYLast != rotateY) {
-            this.rotateYLast = rotateY;
-            var mat = this.debugM;
-            if (!mat) {
-                mat = mat4.create();
-            }
+        if (animResync) {
+            var elevation = this.elevation;
+            var scale = this.scale;
+            var rotateX = this.pitch;
+            var rotateY = this.yaw;
+            var mat = this.mMatrix;
             mat4.identity(mat);
+            mat4.translate(mat, mat, this.toOrigin);
+            mat4.scale(mat, mat, [scale, scale, scale]);
+            mat4.rotateX(mat, mat, utils.radians(rotateX));
             mat4.rotateY(mat, mat, utils.radians(rotateY));
-            mat4.multiply(mat, this.mMatrix, mat);
+            mat4.translate(mat, mat, this.fromOrigin);
+            mat4.translate(mat, mat, elevation);
+            mat4.multiply(mat, this.mMatrixBase, mat);
             utils.debug && console.log("debugM", mat);
-            for (var i = 0, n = this.programs.length; i < n; ++i) {
-                var program = this.programs[i];
-                if (program.uniforms.mMatrix) {
-                    program.uniforms.mMatrix.set(mat).dirty = true;
-                }
-            }
+            this.figureMesh.mMatrix = this.mMatrix;
         }
     },
 
     render: function() {
         this.renderPre();
-        this.renderView();
+        this.renderView(this.pMatrix, this.vMatrix);
         this.renderPost();
 
-        if (true) {
-            //return;
+        if (false) {
+            return;
         }
         if (true) {
             utils.debug = 0;
@@ -561,49 +718,17 @@ var App = utils.extend(utils.WebVR, {
         this.animate(start);
         this.animateTimer.stop();
 
-        gl.enable(gl.RASTERIZER_DISCARD);
-
-        this.transformTimer.start();
-        GL.MeshDqs.transformApplyProgram.useProgram();
-        for (var i = 0, n = meshes.length; i < n; ++i) {
-            var mesh = meshes[i];
-            if (mesh.ENABLE) {
-                mesh.transformApply();
-            }
-        }
-        this.transformTimer.stop();
-
-        this.normalsTimer.start();
-        GL.MeshDqs.normalsComputeProgram.useProgram();
-        for (var i = 0, n = meshes.length; i < n; ++i) {
-            var mesh = meshes[i];
-            if (mesh.ENABLE) {
-                mesh.normalsCompute();
-            }
-        }
-        this.normalsTimer.stop();
-
-        gl.disable(gl.RASTERIZER_DISCARD);
-        gl.enable(gl.DEPTH_TEST);
+        GL.MeshDqs.renderPre();
 
         this.drawTimer.start();
     },
 
-    renderView: function() {
-        var meshes = this.meshes;
-        var program = GL.MeshDqs.normalsDebugProgram;
-
-        program.useProgram();
-        for (var i = 0, n = meshes.length; i < n; ++i) {
-            var mesh = meshes[i];
-            if (mesh.ENABLE) {
-                mesh.normalsDebugDraw();
-            }
-        }
-        this.drawTimer.stop();
+    renderView: function(pMatrix, vMatrix) {
+        GL.MeshDqs.renderView(pMatrix, vMatrix);
     },
 
     renderPost: function() {
+        this.drawTimer.stop();
         var end = this.renderTimer.stop();
         var elapsed = end - this.reportTime;
         if (elapsed >= 2000) {
@@ -615,10 +740,15 @@ var App = utils.extend(utils.WebVR, {
                 "fps": (frames / elapsed * 1000).toFixed(2),
                 "render": this.renderTimer.ema.toFixed(2) + " ms",
                 "animate": this.animateTimer.ema.toFixed(2) + " ms",
-                "DQS": this.transformTimer.ema.toFixed(2) + " ms",
-                "normals": this.normalsTimer.ema.toFixed(2) + " ms",
+                "DQS": GL.MeshDqs.transformTimer.ema.toFixed(2) + " ms",
+                "fit": GL.MeshDqs.meshFitTimer.ema.toFixed(2) + " ms",
+                "normals": GL.MeshDqs.normalsTimer.ema.toFixed(2) + " ms",
+                "tangents": GL.MeshDqs.tangentsTimer.ema.toFixed(2) + " ms",
                 "draw": this.drawTimer.ema.toFixed(2) + " ms"
-            }, ["fps", "render", "animate", "DQS", "normals", "draw"]);
+            }, ["fps", "render", "animate", "DQS",
+                "fit",
+                "normals", "tangents",
+                "draw"]);
         }
     },
 
@@ -632,12 +762,7 @@ var App = utils.extend(utils.WebVR, {
         utils.debug && console.info("vrDraw", this.frameCounter);
 
         mat4.translate(this.vMatrixVR, vMatrix, this.VR_VIEW_TRANSLATE);
-
-        var program = GL.MeshDqs.normalsDebugProgram;
-        program.uniforms.pMatrix.set(pMatrix).dirty = true;
-        program.uniforms.vMatrix.set(this.vMatrixVR).dirty = true;
-
-        this.renderView();
+        this.renderView(pMatrix, this.vMatrixVR);
     },
 
     vrDrawPost: function(frameData) {

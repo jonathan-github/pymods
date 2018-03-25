@@ -723,6 +723,8 @@ GL.ContextBase = utils.Object.extend({
         var bufferBindings = {};
         var textureTargets = [];
         var textureBindings = {};
+        var framebufferTargets = [];
+        var framebufferBindings = {};
         for (var name in names) {
             var value = names[name];
             if (values[value] == undefined) {
@@ -744,12 +746,22 @@ GL.ContextBase = utils.Object.extend({
                     textureBindings[target] = value;
                 }
             }
+            if (name.endsWith("_FRAMEBUFFER_BINDING")) {
+                var target = name.substring(0, name.length - 8);
+                var targetValue = names[target];
+                if (targetValue != undefined) {
+                    framebufferTargets.push(targetValue);
+                    framebufferBindings[target] = value;
+                }
+            }
         }
         GL.EnumValues = values;
         GL.BufferTargets = bufferTargets;
         GL.BufferTargetBindings = bufferBindings;
         GL.TextureTargets = textureTargets;
         GL.TextureTargetBindings = textureBindings;
+        GL.FramebufferTargets = framebufferTargets;
+        GL.FramebufferTargetBindings = framebufferBindings;
 
         var samplerParams = {};
         for (var i = 0, n = GL.SamplerParamNames.length; i < n; ++i) {

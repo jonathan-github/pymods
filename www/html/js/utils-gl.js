@@ -25,6 +25,8 @@ GL.Context = utils.extend(GL.ContextBase, {
         this.activeTextureUnit = undefined;
         this.activeTextureTargets = undefined;
         this.textureTargets = {};
+        this.framebufferTargets = {};
+        this.renderbuffer = undefined;
         this.validate = true;
         return this;
     },
@@ -86,6 +88,8 @@ GL.Context = utils.extend(GL.ContextBase, {
             if (cur != expected) {
                 console.log(
                     targetName,
+                    expected,
+                    cur,
                     this.objectFind(expected, 'glBuffer'),
                     this.objectFind(cur, 'glBuffer')
                 );
@@ -316,6 +320,10 @@ GL.Context = utils.extend(GL.ContextBase, {
         var gl = this.gl;
         var targetName = GL.enumName(target);
         var cur = this.textureTargetGet(targetName);
+        if (cur != texture.glTexure) {
+            /* not bound to target */
+            return;
+        }
         (utils.debug || texture.debug) && console.log(
             texture.name,
             "unbindTexture",
@@ -333,6 +341,144 @@ GL.Context = utils.extend(GL.ContextBase, {
         for (var i = 0, n = GL.TextureTargets.length; i < n; ++i) {
             this.unbindTexture(GL.TextureTargets[i], texture);
         }
+    },
+
+    /**
+     * Get the framebuffer currently bound to target.
+     */
+    framebufferTargetGet: function(targetName) {
+        var gl = this.gl;
+        var cur = this.framebufferTargets[targetName];
+        if (cur === undefined) {
+            /* unknown */
+            cur = gl.getParameter(
+                GL.FramebufferTargetBindings[targetName]
+            );
+            this.framebufferTargets[targetName] = cur;
+        } else if (this.validate) {
+            var expected = gl.getParameter(
+                GL.FramebufferTargetBindings[targetName]
+            );
+            utils.assert && utils.assert(
+                cur == expected,
+                targetName + " out of sync for framebuffer",
+                [expected, cur]
+            );
+            if (cur != expected) {
+                cur = this.framebufferTargets[targetName] = expected;
+            }
+        }
+        return cur;
+    },
+
+    /**
+     * Bind the framebuffer to the target.
+     */
+    bindFramebuffer: function(target, framebuffer) {
+        var gl = this.gl;
+        var targetName = GL.enumName(target);
+        var cur = this.framebufferTargetGet(targetName);
+        if (cur == framebuffer.glFramebuffer) {
+            /* already bound */
+            return;
+        }
+        (utils.debug || framebuffer.debug) && console.log(
+            framebuffer.name,
+            "bindFramebuffer",
+            targetName
+        );
+        gl.bindFramebuffer(target, framebuffer.glFramebuffer);
+        this.framebufferTargets[targetName] = framebuffer.glFramebuffer;
+    },
+
+    /**
+     * Unbind the framebuffer from the target.
+     */
+    unbindFramebuffer: function(target, framebuffer) {
+        var gl = this.gl;
+        var targetName = GL.enumName(target);
+        var cur = this.framebufferTargetGet(targetName);
+        if (cur != framebuffer.glFramebuffer) {
+            /* not bound to target */
+            return;
+        }
+        (utils.debug || framebuffer.debug) && console.log(
+            framebuffer.name,
+            "unbindFramebuffer",
+            targetName
+        );
+        gl.bindFramebuffer(target, null);
+        this.framebufferTargets[targetName] = null;
+    },
+
+    /**
+     * Unbind the framebuffer from all targets.
+     */
+    unbindFramebufferAll: function(framebuffer) {
+        var gl = this.gl;
+        for (var i = 0, n = GL.FramebufferTargets.length; i < n; ++i) {
+            this.unbindFramebuffer(GL.FramebufferTargets[i], framebuffer);
+        }
+    },
+
+    /**
+     * Get the currently bound renderbuffer.
+     */
+    renderbufferGet: function(targetName) {
+        var gl = this.gl;
+        var cur = this.renderbuffer;
+        if (cur === undefined) {
+            /* unknown */
+            cur = gl.getParameter(gl.RENDERBUFFER_BINDING);
+            this.renderbuffer = cur;
+        } else if (this.validate) {
+            var expected = gl.getParameter(gl.RENDERBUFFER_BINDING);
+            utils.assert && utils.assert(
+                cur == expected,
+                targetName + " out of sync for renderbuffer " + unit,
+                [expected, cur]
+            );
+            if (cur != expected) {
+                cur = this.renderbuffer = expected;
+            }
+        }
+        return cur;
+    },
+
+    /**
+     * Bind the renderbuffer.
+     */
+    bindRenderbuffer: function(renderbuffer) {
+        var gl = this.gl;
+        var cur = this.renderbufferGet();
+        if (cur == renderbuffer.glRenderbuffer) {
+            /* already bound */
+            return;
+        }
+        (utils.debug || renderbuffer.debug) && console.log(
+            renderbuffer.name,
+            "bindRenderbuffer"
+        );
+        gl.bindRenderbuffer(renderbuffer.glRenderbuffer);
+        this.renderbuffer = renderbuffer.glRenderbuffer;
+    },
+
+    /**
+     * Unbind the renderbuffer.
+     */
+    unbindRenderbuffer: function(renderbuffer) {
+        var gl = this.gl;
+        var cur = this.renderbufferGet();
+        if (cur != renderbuffer.glRenderbuffer) {
+            /* not bound */
+            return;
+        }
+        (utils.debug || renderbuffer.debug) && console.log(
+            renderbuffer.name,
+            "unbindRenderbuffer"
+        );
+        gl.bindRenderbuffer(null);
+        this.renderbuffer = null;
     },
 
     vertexArrayGet: function() {
@@ -430,12 +576,11 @@ GL.Buffer = utils.extend(utils.Object, {
      *   target: <GLenum>
      * }
      */
-    init: function(context, config) {
-        this.context = context;
+    init: function(config) {
         this.config = config;
         this.allocated = false;
-        this.glBuffer = context.gl.createBuffer();
-        context.objectAdd(this);
+        this.glBuffer = App.context.gl.createBuffer();
+        App.context.objectAdd(this);
         return this;
     },
 
@@ -443,16 +588,15 @@ GL.Buffer = utils.extend(utils.Object, {
         var glBuffer = this.glBuffer;
         if (glBuffer) {
             this.unbindAll(this);
-            this.context.objectRemove(this);
+            App.context.objectRemove(this);
 
             (utils.debug || this.debug) && console.log(
                 this.name,
                 "deleteBuffer"
             );
-            this.context.gl.deleteBuffer(glBuffer);
+            App.context.gl.deleteBuffer(glBuffer);
             this.allocated = false;
             this.glBuffer = null;
-            this.context = null;
             this.config = null;
         }
     },
@@ -461,16 +605,16 @@ GL.Buffer = utils.extend(utils.Object, {
         if (target == undefined) {
             target = this.config && this.config.target;
         }
-        this.context.bindBuffer(target, this);
+        App.context.bindBuffer(target, this);
     },
     unbind: function(target) {
         if (target == undefined) {
             target = this.config && this.config.target;
         }
-        this.context.unbindBuffer(target, this);
+        App.context.unbindBuffer(target, this);
     },
     unbindAll: function() {
-        this.context.unbindBufferAll(this);
+        App.context.unbindBufferAll(this);
     },
 
     /**
@@ -495,7 +639,7 @@ GL.Buffer = utils.extend(utils.Object, {
             srcData = params.srcData,
             srcOffset = params.srcOffset,
             length = params.length;
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var config = this.config;
         if (target == undefined) {
             target = config && config.target || gl.ARRAY_BUFFER;
@@ -576,7 +720,7 @@ GL.Buffer = utils.extend(utils.Object, {
             srcData = params.srcData,
             srcOffset = params.srcOffset,
             length = params.length;
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var config = this.config;
         if (target == undefined) {
             target = config && config.target || gl.ARRAY_BUFFER;
@@ -617,7 +761,6 @@ GL.Buffer = utils.extend(utils.Object, {
                 "target =", GL.enumName(target),
                 "dstByteOffset =", dstByteOffset,
                 "srcData =", srcData,
-                "usage =", GL.enumName(usage),
                 "srcOffset =", srcOffset,
                 "length =", length
             );
@@ -670,7 +813,7 @@ GL.Buffer = utils.extend(utils.Object, {
             readOffset = params.readOffset,
             writeOffset = params.writeOffset,
             size = params.size;
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var config = this.config;
         if (readTarget == undefined) {
             readTarget = gl.COPY_READ_BUFFER;
@@ -737,7 +880,7 @@ GL.Buffer = utils.extend(utils.Object, {
             dstData = params.dstData,
             dstOffset = params.dstOffset,
             length = params.length;
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var config = this.config;
         if (target == undefined) {
             target = config && config.target || gl.ARRAY_BUFFER;
@@ -801,11 +944,10 @@ GL.Sampler = utils.extend(utils.Object, {
      *   }
      * }
      */
-    init: function(context, config) {
-        this.context = context;
+    init: function(config) {
         this.config = config;
-        this.glSampler = context.gl.createSampler();
-        context.objectAdd(this);
+        this.glSampler = App.context.gl.createSampler();
+        App.context.objectAdd(this);
         var params = config && config.params;
         if (params) {
             this.setParams(params);
@@ -817,31 +959,30 @@ GL.Sampler = utils.extend(utils.Object, {
         var glSampler = this.glSampler;
         if (glSampler) {
             this.unbindAll(this);
-            this.context.objectRemove(this);
+            App.context.objectRemove(this);
 
             (utils.debug || this.debug) && console.log(
                 this.name,
                 "deleteSampler"
             );
-            this.context.gl.deleteSampler(glSampler);
+            App.context.gl.deleteSampler(glSampler);
             this.glSampler = null;
-            this.context = null;
             this.config = null;
         }
     },
 
     bind: function(unit) {
-        this.context.bindSampler(unit, this);
+        App.context.bindSampler(unit, this);
     },
     unbind: function(unit) {
-        this.context.unbindSampler(unit, this);
+        App.context.unbindSampler(unit, this);
     },
     unbindAll: function(unit) {
-        this.context.unbindSamplerAll(this);
+        App.context.unbindSamplerAll(this);
     },
 
     getParams: function() {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var sampler = this.glSampler;
         var params = {};
         for (var name in GL.SamplerParams) {
@@ -864,7 +1005,7 @@ GL.Sampler = utils.extend(utils.Object, {
     },
 
     COMPARE_FUNC: function(value) {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var pname = gl.TEXTURE_COMPARE_FUNC;
         (utils.debug || this.debug) && console.log(
             this.name,
@@ -872,10 +1013,10 @@ GL.Sampler = utils.extend(utils.Object, {
             GL.enumName(pname),
             GL.enumName(value)
         );
-        this.context.gl.samplerParameteri(this.glSampler, pname, value);
+        App.context.gl.samplerParameteri(this.glSampler, pname, value);
     },
     COMPARE_MODE: function(value) {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var pname = gl.TEXTURE_COMPARE_MODE;
         (utils.debug || this.debug) && console.log(
             this.name,
@@ -883,10 +1024,10 @@ GL.Sampler = utils.extend(utils.Object, {
             GL.enumName(pname),
             GL.enumName(value)
         );
-        this.context.gl.samplerParameteri(this.glSampler, pname, value);
+        App.context.gl.samplerParameteri(this.glSampler, pname, value);
     },
     MAG_FILTER: function(value) {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var pname = gl.TEXTURE_MAG_FILTER;
         (utils.debug || this.debug) && console.log(
             this.name,
@@ -894,10 +1035,10 @@ GL.Sampler = utils.extend(utils.Object, {
             GL.enumName(pname),
             GL.enumName(value)
         );
-        this.context.gl.samplerParameteri(this.glSampler, pname, value);
+        App.context.gl.samplerParameteri(this.glSampler, pname, value);
     },
     MAX_LOD: function(value) {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var pname = gl.TEXTURE_MAX_LOD;
         (utils.debug || this.debug) && console.log(
             this.name,
@@ -905,10 +1046,10 @@ GL.Sampler = utils.extend(utils.Object, {
             GL.enumName(pname),
            value
         );
-        this.context.gl.samplerParameterf(this.glSampler, pname, value);
+        App.context.gl.samplerParameterf(this.glSampler, pname, value);
     },
     MIN_FILTER: function(value) {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var pname = gl.TEXTURE_MIN_FILTER;
         (utils.debug || this.debug) && console.log(
             this.name,
@@ -916,10 +1057,10 @@ GL.Sampler = utils.extend(utils.Object, {
             GL.enumName(pname),
             GL.enumName(value)
         );
-        this.context.gl.samplerParameteri(this.glSampler, pname, value);
+        App.context.gl.samplerParameteri(this.glSampler, pname, value);
     },
     MIN_LOD: function(value) {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var pname = gl.TEXTURE_MIN_LOD;
         (utils.debug || this.debug) && console.log(
             this.name,
@@ -927,10 +1068,10 @@ GL.Sampler = utils.extend(utils.Object, {
             GL.enumName(pname),
            value
         );
-        this.context.gl.samplerParameterf(this.glSampler, pname, value);
+        App.context.gl.samplerParameterf(this.glSampler, pname, value);
     },
     WRAP_R: function(value) {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var pname = gl.TEXTURE_WRAP_R;
         (utils.debug || this.debug) && console.log(
             this.name,
@@ -938,10 +1079,10 @@ GL.Sampler = utils.extend(utils.Object, {
             GL.enumName(pname),
             GL.enumName(value)
         );
-        this.context.gl.samplerParameteri(this.glSampler, pname, value);
+        App.context.gl.samplerParameteri(this.glSampler, pname, value);
     },
     WRAP_S: function(value) {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var pname = gl.TEXTURE_WRAP_S;
         (utils.debug || this.debug) && console.log(
             this.name,
@@ -949,10 +1090,10 @@ GL.Sampler = utils.extend(utils.Object, {
             GL.enumName(pname),
             GL.enumName(value)
         );
-        this.context.gl.samplerParameteri(this.glSampler, pname, value);
+        App.context.gl.samplerParameteri(this.glSampler, pname, value);
     },
     WRAP_T: function(value) {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var pname = gl.TEXTURE_WRAP_T;
         (utils.debug || this.debug) && console.log(
             this.name,
@@ -960,7 +1101,7 @@ GL.Sampler = utils.extend(utils.Object, {
             GL.enumName(pname),
             GL.enumName(value)
         );
-        this.context.gl.samplerParameteri(this.glSampler, pname, value);
+        App.context.gl.samplerParameteri(this.glSampler, pname, value);
     }
 });
 
@@ -972,21 +1113,14 @@ GL.Texture = utils.extend(utils.Object, {
 
     /**
      * config = {
-     *   name: <string>,
-     *   target: <GLenum>,
-     *   internalFormat: <GLenum>,
-     *   width: <GLsizei>,
-     *   height: <GLsizei>,
-     *   format: <GLenum>,
-     *   type: <GLenum>
+     *   name: <string>
      * }
      */
-    init: function(context, config) {
-        this.context = context;
+    init: function(config) {
         this.config = config;
         this.allocated = false;
-        this.glTexture = context.gl.createTexture();
-        context.objectAdd(this);
+        this.glTexture = App.context.gl.createTexture();
+        App.context.objectAdd(this);
         return this;
     },
 
@@ -994,16 +1128,15 @@ GL.Texture = utils.extend(utils.Object, {
         var glTexture = this.glTexture;
         if (glTexture) {
             this.unbindAll(this);
-            this.context.objectRemove(this);
+            App.context.objectRemove(this);
 
             (utils.debug || this.debug) && console.log(
                 this.name,
                 "deleteTexture"
             );
-            this.context.gl.deleteTexture(glTexture);
+            App.context.gl.deleteTexture(glTexture);
             this.allocated = false;
             this.glTexture = null;
-            this.context = null;
             this.config = null;
         }
     },
@@ -1012,16 +1145,16 @@ GL.Texture = utils.extend(utils.Object, {
         if (target == undefined) {
             target = this.config && this.config.target;
         }
-        this.context.bindTexture(target, this);
+        App.context.bindTexture(target, this);
     },
     unbind: function(target) {
         if (target == undefined) {
             target = this.config && this.config.target;
         }
-        this.context.unbindTexture(target, this);
+        App.context.unbindTexture(target, this);
     },
     unbindAll: function() {
-        this.context.unbindTextureAll(this);
+        App.context.unbindTextureAll(this);
     },
 
     /**
@@ -1035,7 +1168,7 @@ GL.Texture = utils.extend(utils.Object, {
      * }
      */
     setStorage: function(params) {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var target = params.target,
             levels = params.levels,
             internalFormat = params.internalFormat,
@@ -1081,7 +1214,7 @@ GL.Texture = utils.extend(utils.Object, {
             "width =", width,
             "height =", height
         );
-        this.context.gl.texStorage2D(
+        App.context.gl.texStorage2D(
             target, levels, internalFormat, width, height
         );
         this.allocated = true;
@@ -1099,12 +1232,14 @@ GL.Texture = utils.extend(utils.Object, {
      *   height: <GLsizei> | config.height | source.height,
      *   border: <GLint> | 0,
      *   format: <GLenum> | config.format | internalFormat,
-     *   type: <GLenum> | config.type,
-     *   source: <canvas> | <image> | ...
+     *   type: <GLenum> | config.type | UNSIGNED_BYTE,
+     *   source: <canvas> | <image> | ...,
+     *   flipY: <boolean> | false,
+     *   mipMaps: <boolean> | false
      * }
      */
     setImage: function(params) {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var target = params.target,
             level = params.level,
             internalFormat = params.internalFormat,
@@ -1113,7 +1248,9 @@ GL.Texture = utils.extend(utils.Object, {
             border = params.border,
             format = params.format,
             type = params.type,
-            source = params.source;
+            source = params.source,
+            flipY = params.flipY,
+            mipMaps = params.mipMaps;
 
         var config = this.config;
         if (target == undefined) {
@@ -1133,6 +1270,12 @@ GL.Texture = utils.extend(utils.Object, {
         }
         if (type == undefined) {
             type = config && config.type || gl.UNSIGNED_BYTE;
+        }
+        if (flipY == undefined) {
+            flipY = false;
+        }
+        if (mipMaps == undefined) {
+            mipMaps = false;
         }
         console.assert(
             source != undefined,
@@ -1171,13 +1314,24 @@ GL.Texture = utils.extend(utils.Object, {
             //"border =", border,
             "format =", GL.enumName(format),
             "type =", GL.enumName(type),
-            "source =", source
+            "source =", source,
+            "flipY =", flipY,
+            "mipMaps =", mipMaps
         );
-        this.context.gl.texStorage2D(
+        if (flipY) {
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, flipY);
+        }
+        gl.texImage2D(
             target, level, internalFormat,
             width, height, border,
             format, type, source
         );
+        if (flipY) {
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        }
+        if (mipMaps) {
+            gl.generateMipmap(target);
+        }
         this.allocated = true;
         this.srcWidth = width;
         this.srcHeight = height;
@@ -1199,7 +1353,7 @@ GL.Texture = utils.extend(utils.Object, {
      * }
      */
     setData: function(params) {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var target = params.target,
             level = params.level,
             internalFormat = params.internalFormat,
@@ -1273,7 +1427,7 @@ GL.Texture = utils.extend(utils.Object, {
               srcData: srcData,
               srcOffset: srcOffset }
         );
-        this.context.gl.texImage2D(
+        App.context.gl.texImage2D(
             target, level, internalFormat,
             width, height, border,
             format, type, srcData, srcOffset
@@ -1297,7 +1451,7 @@ GL.Texture = utils.extend(utils.Object, {
      * }
      */
     copyFramebuffer: function(params) {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var target = params.target,
             level = params.level,
             internalFormat = params.internalFormat,
@@ -1352,7 +1506,7 @@ GL.Texture = utils.extend(utils.Object, {
             "height =", height
             //,"border =", border
         );
-        this.context.gl.copyTexImage2D(
+        App.context.gl.copyTexImage2D(
             target, level, internalFormat,
             x, y, width, height,
             border
@@ -1385,7 +1539,7 @@ GL.Texture = utils.extend(utils.Object, {
             offset = params.offset,
             buffer = params.buffer;
 
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var config = this.config;
         if (target == undefined) {
             target = config && config.target || gl.TEXTURE_2D;
@@ -1471,12 +1625,10 @@ GL.Shader = utils.extend(utils.Object, {
      *   }
      * }
      */
-    init: function(context, config) {
-	var gl = context.gl;
-        this.context = context;
+    init: function(config) {
         this.config = config;
-        this.glShader = gl.createShader(config.type);
-        context.objectName(this);
+        this.glShader = App.context.gl.createShader(config.type);
+        App.context.objectName(this);
         if (config.sourceCode) {
             this.compile(config.sourceCode);
             config.sourceCode = null;
@@ -1487,9 +1639,8 @@ GL.Shader = utils.extend(utils.Object, {
     fini: function() {
         var glShader = this.glShader;
         if (glShader) {
-            this.context.gl.deleteShader(glShader);
+            App.context.gl.deleteShader(glShader);
             this.glShader = null;
-            this.context = null;
             this.config = null;
         }
     },
@@ -1501,18 +1652,40 @@ GL.Shader = utils.extend(utils.Object, {
     defineRE: /#\s*define\s+(\w+)\s+__(\1)__/g,
 
     /**
+     * @return the number of lines in sourceCode[:offset]
+     */
+    lineNumber: function(sourceCode, offset) {
+        var lineno = 1;
+        var start = 0;
+        var idx = sourceCode.indexOf("\n", start);
+        while (idx >= 0) {
+            if (idx < offset) {
+                ++lineno;
+                start = idx + 1;
+                idx = sourceCode.indexOf("\n", start);
+            } else {
+                break;
+            }
+        }
+        return lineno;
+    },
+
+    /**
      * Preprocess the source code.
      */
     preprocess: function(sourceCode, includes) {
         var name = this.name;
         if (includes) {
+            var sourceFile = 1;
             sourceCode = sourceCode.replace(
                 this.includeRE,
                 function(match, p1, offset, string) {
                     var value = includes[p1];
                     if (value) {
-                        utils.debug > 1 && console.log(name, "#include", p1);
-                        return value;
+                        var lineno = GL.Shader.lineNumber(sourceCode, offset);
+                        return "#line 1 " + sourceFile++ + "\n" +
+                               value +
+                               "#line " + lineno + " 0\n";
                     } else {
                         throw new Error(name + ": missing #include for " + p1);
                     }
@@ -1527,7 +1700,6 @@ GL.Shader = utils.extend(utils.Object, {
                     var value = defines && defines[p2];
                     if (value) {
                         var repl = "#define " + p1 + " " + value;
-                        utils.debug > 1 && console.log(name, repl);
                         return repl;
                     } else {
                         throw new Error(name + ": missing value for #define " + p1);
@@ -1539,7 +1711,7 @@ GL.Shader = utils.extend(utils.Object, {
     },
 
     compile: function(sourceCode, includes) {
-	var gl = this.context.gl;
+	var gl = App.context.gl;
         var glShader = this.glShader;
         if (this.config.defines || includes) {
             sourceCode = this.preprocess(sourceCode, includes);
@@ -1582,6 +1754,44 @@ GL.Uniform = utils.extend(utils.Object, {
     }
 });
 
+GL.Uniform1b = utils.extend(GL.Uniform, {
+    suffix: '1i',
+    size: 1,
+
+    flush: function() {
+        if (!this.dirty) {
+            return;
+        }
+        this.dirty = false;
+
+        (utils.debug || this.debug || this.program.debug) && console.log(
+            this.name,
+            "uniform1i",
+            this.value
+        );
+        App.context.gl.uniform1i(this.location, this.value ? 1 : 0);
+    }
+});
+
+GL.Uniform1i = utils.extend(GL.Uniform, {
+    suffix: '1i',
+    size: 1,
+
+    flush: function() {
+        if (!this.dirty) {
+            return;
+        }
+        this.dirty = false;
+
+        (utils.debug || this.debug || this.program.debug) && console.log(
+            this.name,
+            "uniform1i",
+            this.value
+        );
+        App.context.gl.uniform1i(this.location, this.value);
+    }
+});
+
 GL.Uniform1f = utils.extend(GL.Uniform, {
     suffix: '1f',
     size: 1,
@@ -1597,8 +1807,7 @@ GL.Uniform1f = utils.extend(GL.Uniform, {
             "uniform1f",
             this.value
         );
-        var gl = this.program.context.gl;
-        gl.uniform1f(this.location, this.value);
+        App.context.gl.uniform1f(this.location, this.value);
     }
 });
 
@@ -1617,8 +1826,26 @@ GL.Uniform3f = utils.extend(GL.Uniform, {
             "uniform3fv",
             this.value
         );
-        var gl = this.program.context.gl;
-        gl.uniform3fv(this.location, this.value);
+        App.context.gl.uniform3fv(this.location, this.value);
+    }
+});
+
+GL.Uniform4f = utils.extend(GL.Uniform, {
+    suffix: '4fv',
+    size: 3,
+
+    flush: function() {
+        if (!this.dirty) {
+            return;
+        }
+        this.dirty = false;
+
+        (utils.debug || this.debug || this.program.debug) && console.log(
+            this.name,
+            "uniform4fv",
+            this.value
+        );
+        App.context.gl.uniform4fv(this.location, this.value);
     }
 });
 
@@ -1648,8 +1875,7 @@ GL.UniformMatrix4f = utils.extend(GL.Uniform, {
             "uniformMatrix4fv",
             this.value
         );
-        var gl = this.program.context.gl;
-        gl.uniformMatrix4fv(this.location, this.transpose, this.value);
+        App.context.gl.uniformMatrix4fv(this.location, this.transpose, this.value);
     }
 });
 
@@ -1678,8 +1904,11 @@ GL.UniformSampler2D = utils.extend(GL.Uniform, {
         return this;
     },
     flush: function() {
-        var context = this.program.context;
+        var context = App.context;
         var gl = context.gl;
+        if (this.textureUnit == undefined) {
+            return;
+        }
         context.activeTexture(this.textureUnit);
         if (this.sampler) {
             this.sampler.bind(this.textureUnit);
@@ -1703,8 +1932,11 @@ GL.UniformSampler2D = utils.extend(GL.Uniform, {
  * WebGL uniform types
  */
 GL.UniformTypes = {
+    BOOL: GL.Uniform1b,
+    INT: GL.Uniform1i,
     FLOAT: GL.Uniform1f,
     FLOAT_VEC3: GL.Uniform3f,
+    FLOAT_VEC4: GL.Uniform4f,
     FLOAT_MAT4: GL.UniformMatrix4f,
     SAMPLER_2D: GL.UniformSampler2D,
     UNSIGNED_INT_SAMPLER_2D: GL.UniformSampler2D
@@ -1714,7 +1946,6 @@ GL.Attribute = utils.extend(utils.Object, {
     TYPE: 'Attribute',
 
     init: function(program, name, index, info) {
-        var gl = program.context.gl;
         this.program = program;
         this.name = name;
         this.index = index;
@@ -1747,7 +1978,7 @@ GL.Attribute = utils.extend(utils.Object, {
         }
         this.dirty = false;
 
-        var gl = this.program.context.gl;
+        var gl = App.context.gl;
         this.buffer.bind(gl.ARRAY_BUFFER);
 
         if (this.integer) {
@@ -1793,12 +2024,66 @@ GL.Attribute = utils.extend(utils.Object, {
     }
 });
 
+GL.AttributeUInt = utils.extend(GL.Attribute, {
+    integer: true,
+    SET_SPECS: {
+        buffer: { type: GL.Buffer, required: true },
+        size: { type: 'number', defValue: 1 },
+        type: { type: 'number', defValue: GL.Enums.UNSIGNED_INT },
+        normalized: { type: 'boolean', defValue: false },
+        stride: { type: 'number', defValue: 0 },
+        offset: { type: 'number', defValue: 0 }
+    }
+});
 GL.AttributeUIVec2 = utils.extend(GL.Attribute, {
     integer: true,
     SET_SPECS: {
         buffer: { type: GL.Buffer, required: true },
         size: { type: 'number', defValue: 2 },
         type: { type: 'number', defValue: GL.Enums.UNSIGNED_INT },
+        normalized: { type: 'boolean', defValue: false },
+        stride: { type: 'number', defValue: 0 },
+        offset: { type: 'number', defValue: 0 }
+    }
+});
+GL.AttributeUIVec3 = utils.extend(GL.Attribute, {
+    integer: true,
+    SET_SPECS: {
+        buffer: { type: GL.Buffer, required: true },
+        size: { type: 'number', defValue: 3 },
+        type: { type: 'number', defValue: GL.Enums.UNSIGNED_INT },
+        normalized: { type: 'boolean', defValue: false },
+        stride: { type: 'number', defValue: 0 },
+        offset: { type: 'number', defValue: 0 }
+    }
+});
+GL.AttributeUIVec4 = utils.extend(GL.Attribute, {
+    integer: true,
+    SET_SPECS: {
+        buffer: { type: GL.Buffer, required: true },
+        size: { type: 'number', defValue: 4 },
+        type: { type: 'number', defValue: GL.Enums.UNSIGNED_INT },
+        normalized: { type: 'boolean', defValue: false },
+        stride: { type: 'number', defValue: 0 },
+        offset: { type: 'number', defValue: 0 }
+    }
+});
+GL.AttributeIVec4 = utils.extend(GL.Attribute, {
+    integer: true,
+    SET_SPECS: {
+        buffer: { type: GL.Buffer, required: true },
+        size: { type: 'number', defValue: 4 },
+        type: { type: 'number', defValue: GL.Enums.INT },
+        normalized: { type: 'boolean', defValue: false },
+        stride: { type: 'number', defValue: 0 },
+        offset: { type: 'number', defValue: 0 }
+    }
+});
+GL.AttributeFloat = utils.extend(GL.Attribute, {
+    SET_SPECS: {
+        buffer: { type: GL.Buffer, required: true },
+        size: { type: 'number', defValue: 1 },
+        type: { type: 'number', defValue: GL.Enums.FLOAT },
         normalized: { type: 'boolean', defValue: false },
         stride: { type: 'number', defValue: 0 },
         offset: { type: 'number', defValue: 0 }
@@ -1824,14 +2109,30 @@ GL.AttributeVec3 = utils.extend(GL.Attribute, {
         offset: { type: 'number', defValue: 0 }
     }
 });
+GL.AttributeVec4 = utils.extend(GL.Attribute, {
+    SET_SPECS: {
+        buffer: { type: GL.Buffer, required: true },
+        size: { type: 'number', defValue: 4 },
+        type: { type: 'number', defValue: GL.Enums.FLOAT },
+        normalized: { type: 'boolean', defValue: false },
+        stride: { type: 'number', defValue: 0 },
+        offset: { type: 'number', defValue: 0 }
+    }
+});
 
 /**
  * WebGL attribute types
  */
 GL.AttributeTypes = {
+    UNSIGNED_INT: GL.AttributeUInt,
     UNSIGNED_INT_VEC2: GL.AttributeUIVec2,
+    UNSIGNED_INT_VEC3: GL.AttributeUIVec3,
+    UNSIGNED_INT_VEC4: GL.AttributeUIVec4,
+    INT_VEC4: GL.AttributeIVec4,
+    FLOAT: GL.AttributeFloat,
     FLOAT_VEC2: GL.AttributeVec2,
-    FLOAT_VEC3: GL.AttributeVec3
+    FLOAT_VEC3: GL.AttributeVec3,
+    FLOAT_VEC4: GL.AttributeVec4
 };
 
 GL.Varying = utils.extend(utils.Object, {
@@ -1857,7 +2158,7 @@ GL.Varying = utils.extend(utils.Object, {
     },
 
     bind: function() {
-        var gl = this.program.context.gl;
+        var gl = App.context.gl;
         if (!this.buffer) {
             return;
         }
@@ -1890,7 +2191,7 @@ GL.Varying = utils.extend(utils.Object, {
         if (!this.buffer) {
             return;
         }
-        var gl = this.program.context.gl;
+        var gl = App.context.gl;
         var target = gl.TRANSFORM_FEEDBACK_BUFFER;
         (utils.debug || this.debug) && console.log(
             this.name,
@@ -1906,29 +2207,26 @@ GL.Varying = utils.extend(utils.Object, {
 GL.TransformFeedback = utils.extend(utils.Object, {
     TYPE: 'TransformFeedback',
 
-    init: function(context, config) {
-        var gl = context.gl;
-        this.context = context;
+    init: function(config) {
         this.config = config;
-        context.objectName(this);
-        this.glFeedback = gl.createTransformFeedback();
+        App.context.objectName(this);
+        this.glFeedback = App.context.gl.createTransformFeedback();
         return this;
     },
 
     fini: function() {
         var glFeedback = this.glFeedback;
         if (glFeedback) {
-            var gl = this.context.gl;
+            var gl = App.context.gl;
             this.unbind();
             gl.deleteTransformFeedback(glFeedback);
             this.glFeedback = null;
-            this.context = null;
             this.config = null;
         }
     },
 
     bind: function() {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var cur = gl.getParameter(gl.TRANSFORM_FEEDBACK_BINDING);
         if (cur == this.glFeedback) {
             /* already bound */
@@ -1942,7 +2240,7 @@ GL.TransformFeedback = utils.extend(utils.Object, {
     },
 
     unbind: function() {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var cur = gl.getParameter(gl.TRANSFORM_FEEDBACK_BINDING);
         if (cur != this.glFeedback) {
             /* not bound */
@@ -1956,7 +2254,7 @@ GL.TransformFeedback = utils.extend(utils.Object, {
     },
 
     begin: function(program, mode) {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         this.bind();
         var varyings = program.varyingItems;
         this.varyings = varyings;
@@ -1973,7 +2271,7 @@ GL.TransformFeedback = utils.extend(utils.Object, {
     },
 
     end: function() {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         (utils.debug || this.debug) && console.log(
             this.name,
             "endTransformFeedback"
@@ -2001,12 +2299,10 @@ GL.Program = utils.extend(utils.Object, {
      *   fragmentShader: <GL.Shader>,
      * }
      */
-    init: function(context, config) {
-        var gl = context.gl;
-        this.context = context;
+    init: function( config) {
         this.config = config;
-	this.glProgram = gl.createProgram();
-        context.objectAdd(this);
+	this.glProgram = App.context.gl.createProgram();
+        App.context.objectAdd(this);
         if (config.vertexShader && config.fragmentShader) {
             this.link(config.vertexShader, config.fragmentShader);
             config.vertexShader = null;
@@ -2018,26 +2314,25 @@ GL.Program = utils.extend(utils.Object, {
     fini: function() {
         var glProgram = this.glProgram;
         if (glProgram) {
-            this.context.objectRemove(this);
+            App.context.objectRemove(this);
 
             (utils.debug || this.debug) && console.log(
                 this.name,
                 "deleteProgram"
             );
-            this.context.gl.deleteProgram(glProgram);
+            App.context.gl.deleteProgram(glProgram);
             this.uniforms = null;
             this.attributeInfo = null;
             this.varyings = null;
             this.varyingItems = null;
             this.items = null;
             this.glProgram = null;
-            this.context = null;
             this.config = null;
         }
     },
 
     link: function(vertexShader, fragmentShader) {
-	var gl = this.context.gl;
+	var gl = App.context.gl;
         var glProgram = this.glProgram;
 	gl.attachShader(glProgram, vertexShader.glShader);
 	gl.attachShader(glProgram, fragmentShader.glShader);
@@ -2080,7 +2375,7 @@ GL.Program = utils.extend(utils.Object, {
     },
 
     uniformsInit: function() {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var glProgram = this.glProgram;
 
         this.uniforms = {};
@@ -2109,7 +2404,7 @@ GL.Program = utils.extend(utils.Object, {
     },
 
     attributesInit: function() {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var glProgram = this.glProgram;
 
         this.attributeInfo = [];
@@ -2150,7 +2445,7 @@ GL.Program = utils.extend(utils.Object, {
     },
 
     varyingsInit: function() {
-        var gl = this.context.gl;
+        var gl = App.context.gl;
         var glProgram = this.glProgram;
 
         this.varyings = {};
@@ -2177,7 +2472,7 @@ GL.Program = utils.extend(utils.Object, {
             this.name,
             "useProgram"
         );
-        this.context.gl.useProgram(this.glProgram);
+        App.context.gl.useProgram(this.glProgram);
     },
 
     flush: function() {
@@ -2205,7 +2500,7 @@ GL.VertexArray = utils.extend(utils.Object, {
         this.config = config;
 
         var program = config.program;
-        var context = program.context;
+        var context = App.context;
         var gl = context.gl;
         var glProgram = program.glProgram;
 
@@ -2236,17 +2531,17 @@ GL.VertexArray = utils.extend(utils.Object, {
                 this.name,
                 "deleteVertexArray"
             );
-            this.config.program.context.gl.deleteVertexArray(glVertexArray);
+            App.context.gl.deleteVertexArray(glVertexArray);
             this.glVertexArray = null;
             this.config = null;
         }
     },
 
     bind: function() {
-        this.config.program.context.bindVertexArray(this);
+        App.context.bindVertexArray(this);
     },
     unbind: function() {
-        this.config.program.context.unbindVertexArray(this);
+        App.context.unbindVertexArray(this);
     },
 
     flush: function() {
@@ -2306,7 +2601,7 @@ GL.ShaderLoader = utils.extend(utils.Object, {
         return this;
     },
 
-    compile: function(context, programs) {
+    compile: function(programMap, programList) {
         var includes = {};
         for (var url in this.urls) {
             var rec = this.urls[url];
@@ -2327,7 +2622,7 @@ GL.ShaderLoader = utils.extend(utils.Object, {
             for (var i = 0, n = configs.length; i < n; ++i) {
                 var sconfig = configs[i];
                 if (sconfig.type != '#include') {
-                    var shader = GL.Shader.create(context, sconfig);
+                    var shader = GL.Shader.create(sconfig);
                     shader.compile(src, includes);
                     shaders[shader.name] = shader;
                 }
@@ -2350,17 +2645,274 @@ GL.ShaderLoader = utils.extend(utils.Object, {
                 " for program " + pconfig.name
             );
             utils.assert && utils.assert(
-                programs[pconfig.name] == undefined,
+                programMap[pconfig.name] == undefined,
                 "multiple programs with name " + pconfig.name
             );
-            programs[pconfig.name] = GL.Program.create(context, {
+            var program = GL.Program.create({
                 name: pconfig.name,
                 vertexShader: vertexShader,
                 fragmentShader: fragmentShader,
                 varyings: pconfig.varyings,
                 bufferMode: pconfig.bufferMode
             });
+            programMap[pconfig.name] = program;
+            programList.push(program);
         }
-        return programs;
+    }
+});
+
+/**
+ * WebGLFramebuffer
+ */
+GL.Framebuffer = utils.extend(utils.Object, {
+    TYPE: 'Framebuffer',
+
+    init: function(config) {
+        this.config = config;
+        this.glFramebuffer = App.context.gl.createFramebuffer();
+        App.context.objectAdd(this);
+        return this;
+    },
+
+    fini: function() {
+        var glFramebuffer = this.glFramebuffer;
+        if (glFramebuffer) {
+            this.unbindAll();
+            App.context.objectRemove(this);
+
+            (utils.debug || this.debug) && console.log(
+                this.name,
+                "deleteFramebuffer"
+            );
+            App.context.gl.deleteFramebuffer(glFramebuffer);
+            this.glFramebuffer = null;
+            this.config = null;
+        }
+    },
+
+    checkStatus: function(target) {
+        var context = App.context;
+        var gl = context.gl;
+        if (target == undefined) {
+            target = this.config && this.config.target || gl.DRAW_FRAMEBUFFER;
+        }
+        context.bindFramebuffer(target, this);
+        var status = gl.checkFramebufferStatus(target);
+        (utils.debug || this.debug) && console.log(
+            this.name,
+            "checkFramebufferStatus",
+            GL.enumName(target),
+            GL.enumName(status)
+        );
+        return status;
+    },
+
+    bind: function(target) {
+        var context = App.context;
+        var gl = context.gl;
+        if (target == undefined) {
+            target = this.config && this.config.target || gl.DRAW_FRAMEBUFFER;
+        }
+        context.bindFramebuffer(target, this);
+    },
+    unbind: function(target) {
+        var context = App.context;
+        var gl = context.gl;
+        if (target == undefined) {
+            target = this.config && this.config.target || gl.DRAW_FRAMEBUFFER;
+        }
+        context.unbindFramebuffer(target, this);
+    },
+    unbindAll: function() {
+        App.context.unbindFramebufferAll(this);
+    },
+
+    /**
+     * params = {
+     *   target: <GLenum> | config.target | gl.DRAW_FRAMEBUFFER,
+     *   attachment: <GLenum>,
+     *   renderbufferTarget: <GLenum> | gl.RENDERBUFFER,
+     *   renderbuffer: <GL.Renderbuffer>
+     * }
+     */
+    renderBuffer: function(params) {
+        var target = params.target,
+            attachment = params.attachment,
+            renderbufferTarget = params.renderbufferTarget,
+            renderbuffer = params.renderbuffer;
+        var context = App.context;
+        var gl = context.gl;
+        var config = this.config;
+        if (target == undefined) {
+            target = config && config.target || gl.DRAW_FRAMEBUFFER;
+        }
+        if (renderbufferTarget == undefined) {
+            renderbufferTarget = gl.RENDERBUFFER;
+        }
+        console.assert(
+            attachment != undefined,
+            "missing attachment"
+        );
+        console.assert(
+            renderbuffer != undefined && renderbuffer.glRenderbuffer,
+            "missing renderbuffer"
+        );
+
+        (utils.debug || this.debug) && console.log(
+            this.name,
+            "framebufferRenderbuffer",
+            { target: target,
+              attachment: GL.enumName(attachement),
+              renderbufferTarget: GL.enumName(renderbufferTarget),
+              renderbuffer: renderbuffer.name }
+        );
+        this.bind(target);
+        gl.framebufferRenderbuffer(
+            target, attachment,
+            renderbufferTarget, renderbuffer.glRenderbuffer
+        );
+    },
+
+    /**
+     * params = {
+     *   target: <GLenum> | config.target | gl.DRAW_FRAMEBUFFER,
+     *   attachment: <GLenum>,
+     *   texTarget: <GLenum> | gl.TEXURE_2D,
+     *   texture: <GL.Texture>,
+     *   level: <GL.RenderBuffer>
+     * }
+     */
+    texture2D: function(params) {
+        var target = params.target,
+            attachment = params.attachment,
+            texTarget = params.texTarget,
+            texture = params.texture,
+            level = params.level;
+        var context = App.context;
+        var gl = context.gl;
+        var config = this.config;
+        if (target == undefined) {
+            target = config && config.target || gl.DRAW_FRAMEBUFFER;
+        }
+        if (texTarget == undefined) {
+            texTarget = gl.TEXTURE_2D;
+        }
+        if (level == undefined) {
+            level = 0;
+        }
+        console.assert(
+            attachment != undefined,
+            "missing attachment"
+        );
+        console.assert(
+            texture !== undefined && (texture === null || texture.glTexture),
+            "missing texture"
+        );
+
+        (utils.debug || this.debug) && console.log(
+            this.name,
+            "framebufferTexture2D",
+            { target: GL.enumName(target),
+              attachment: GL.enumName(attachment),
+              texTarget: GL.enumName(texTarget),
+              texture: texture && texture.name,
+              level: level }
+        );
+        this.bind(target);
+        if (texture) {
+            //texture.bind(texTarget);
+        }
+        gl.framebufferTexture2D(
+            target, attachment,
+            texTarget, texture && texture.glTexture,
+            level
+        );
+        if (texture) {
+            //texture.unbind(texTarget);
+        }
+    }
+});
+
+/**
+ * WebGLRenderbuffer
+ */
+GL.Renderbuffer = utils.extend(utils.Object, {
+    TYPE: 'Renderbuffer',
+
+    init: function(config) {
+        this.config = config;
+        this.glRenderbuffer = App.context.gl.createRenderbuffer();
+        App.context.objectAdd(this);
+        return this;
+    },
+
+    fini: function() {
+        var glRenderbuffer = this.glRenderbuffer;
+        if (glRenderbuffer) {
+            this.unbind();
+            App.context.objectRemove(this);
+
+            (utils.debug || this.debug) && console.log(
+                this.name,
+                "deleteRenderbuffer"
+            );
+            App.context.gl.deleteRenderbuffer(glRenderbuffer);
+            this.glRenderbuffer = null;
+            this.config = null;
+        }
+    },
+
+    bind: function() {
+        App.context.bindRenderbuffer(this);
+    },
+    unbind: function() {
+        App.context.unbindRenderbuffer(this);
+    },
+
+    /**
+     * params = {
+     *   target: <GLenum> | gl.RENDERBUFFER,
+     *   internalFormat: <GLenum>,
+     *   width: <GLsizei>,
+     *   height: <GLsizei>
+     * }
+     */
+    storage: function(params) {
+        var target = params.target,
+            internalFormat = params.internalFormat,
+            width = params.width,
+            height = params.height;
+        var context = App.context;
+        var gl = context.gl;
+        var config = this.config;
+        if (target == undefined) {
+            target = gl.RENDERBUFFER;
+        }
+        console.assert(
+            internalFormat != undefined,
+            "missing internalFormat"
+        );
+        console.assert(
+            width != undefined,
+            "missing width"
+        );
+        console.assert(
+            height != undefined,
+            "missing height"
+        );
+
+        (utils.debug || this.debug) && console.log(
+            this.name,
+            "renderbufferStorage",
+            { target: target,
+              internalFormat: GL.enumName(internalFormat),
+              width: width,
+              height: height }
+        );
+        this.bind(target);
+        gl.renderbufferStorage(
+            target, internalFormat,
+            width, height
+        );
     }
 });

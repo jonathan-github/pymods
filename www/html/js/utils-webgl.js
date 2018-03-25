@@ -1952,12 +1952,12 @@ utils.AssetFigure = utils.extend(utils.AssetRequest, {
 
     get: function(library) {
 	var images = this.model.images;
-	if (images && library) {
+        var assets = this.images;
+	if (images && assets && library) {
 	    if (!library.images) {
 		library.images = {};
 		library.imageMaps = {};
 	    }
-	    var assets = this.images;
 	    for (var i = 0, n = images.length; i < n; ++i) {
 		var image = images[i];
 		var asset = assets[i];
@@ -2054,7 +2054,8 @@ utils.AssetFigure = utils.extend(utils.AssetRequest, {
                         }
                     }
                 }
-		var src = this.textureDir ? this.textureDir + "/" + file : file;
+                var textureDir = this.config.textureDir || this.textureDir;
+		var src = textureDir ? textureDir + "/" + file : file;
 		var asset = this.loader.library[src];
 		if (!asset) {
 		    asset = utils.AssetImage.create({

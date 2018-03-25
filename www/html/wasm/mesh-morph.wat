@@ -31,13 +31,13 @@
     (br_if $break (i32.eqz (get_local $count)))
     (set_local $count (i32.sub (get_local $count) (i32.const 1)))
 
-    ;; load vertex address
+    ;; load the morph data
+    ;; {vi: i32, dx: f32, dy: f32, dz: f32}
+    ;; vi
     (set_local $vi (i32.add (get_local $coords)
                             (i32.mul (i32.load (get_local $morph))
                                      (i32.const 12))))
     (set_local $morph (i32.add (get_local $morph) (i32.const 4)))
-
-    ;; load the per-vertex morph delta
     ;; dx
     (set_local $dx (f32.mul (f32.load (get_local $morph)) (get_local $value)))
     (set_local $morph (i32.add (get_local $morph) (i32.const 4)))

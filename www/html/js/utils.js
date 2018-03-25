@@ -19,11 +19,13 @@ utils.debug = 0;
  * @param {boolean} condition
  * @param {String} message
  */
-utils.assertThrow = function(condition, message, log) {
+utils.assertThrow = function(condition, message) {
     if (!condition) {
-	if (log) {
-	    console.error("assertion failed: ", message, log);
-	}
+        var args = ["assertion failed: " + message];
+        for (var i = 2, n = arguments.length; i < n; ++i) {
+            args.push(arguments[i]);
+        }
+        console.error.apply(console, args);
 	throw new Error(message);
     }
 };
@@ -1144,6 +1146,9 @@ utils.Asset = utils.extend(utils.Object, {
     }
 });
 
+/// map of asset types
+utils.AssetTypes = {};
+
 /**
  * Prototype batch asset loader.
  * @mixin
@@ -1411,6 +1416,74 @@ utils.AssetFetch = utils.extend(utils.Asset, {
 	} else {
 	    return true;
 	}
+    }
+});
+
+/**
+ * Asset batch loader.
+ * @mixin
+ * @mixes utils.AssetRequest
+ */
+utils.AssetBatch = utils.extend(utils.AssetRequest, {
+    init: function(config) {
+	if (!config.responseType) {
+	    config.responseType = 'json';
+	}
+	utils.AssetRequest.init.call(this, config);
+	return this;
+    },
+
+    get: function() {
+        var batch = this.batch;
+        var results = [];
+        for (var i = 0, n = batch.length; i < n; ++i) {
+            var rec = batch[i];
+            var req = rec.req;
+            var asset = rec.asset;
+            var group = results;
+            if (req.group) {
+                group = results[req.group];
+                if (!group) {
+                    group = results[req.group] = [];
+                }
+            }
+            if (req.name) {
+                group[req.name] = asset;
+            }
+            group.push(asset);
+        }
+        return results;
+    },
+
+    cleanup: function() {
+        this.batch = null;
+	utils.AssetRequest.cleanup.call(this);
+    },
+
+    ready: function() {
+        if (this.batchLoad(this.responseJSON())) {
+            utils.AssetRequest.ready.call(this);
+        }
+    },
+
+    batchLoad: function(batch) {
+        this.batch = [];
+        for (var i = 0, n = batch.length; i < n; ++i) {
+            var req = batch[i];
+            if (req.load === false) {
+                continue;
+            }
+            var type = req.type || 'AssetRequest';
+            var assetType = utils[type];
+            if (!assetType || !utils.isA(assetType, utils.Asset)) {
+                this.error("unknown asset type " + type);
+                return false;
+            }
+            var asset = assetType.create(req.config);
+            this.loader.append(asset);
+            this.batch.push({ req: req, asset: asset });
+        }
+        return true;
     }
 });
 
