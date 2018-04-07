@@ -22,6 +22,7 @@ uniform sampler2D uCutoutTexture;
 uniform float uCutoutThreshold;
 uniform bool uCutoutBlend;
 
+uniform bool uTransparent;
 uniform float uRoughness;
 uniform float uMetallic;
 
@@ -40,6 +41,18 @@ out vec4 fColor;
 void main() {
 	vec3 normal = normalize(vNormal);
 	vec3 v = normalize(-vPosition.xyz);
+
+	if (uTransparent) {
+		vec3 spec = specular(
+			normal, v,
+			uLightDirection, uLightColor,
+			uRoughness, vec3(1.0)
+		);	
+	float alpha = (spec.r + spec.g + spec.b) / 3.0;
+		fColor.rgb = spec * alpha;
+		fColor.a = alpha;
+		return;
+	}
 
 	vec3 ambient = uAmbientColor;
 	vec3 diffuse = uDiffuseColor;

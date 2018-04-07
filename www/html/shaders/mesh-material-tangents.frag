@@ -82,6 +82,61 @@ vec3 bumpNormal(float dt, float scale) {
 	return normalize(n);
 }
 
+/**
+ * Re-orient the bump map normal so that the normal
+ * from the texture map is up instead of the Z-axis.
+ */
+vec3 bumpRotate(vec3 n, vec3 bn) {
+	/*
+	 * rotation angle (theta):
+	 *	cos(theta) = dot(Z, N)
+	 */
+	float cosT = n.z;
+	if (cosT > 0.999) {
+		// don't need to rotate if Z, N are (close to) parallel
+		return bn;
+	}
+
+	/*
+	 * axis of rotation (axis):
+	 *	sin(theta) * axis = cross(Z, N)
+	 * quarternion (Q):
+	 *	Q = vec4(sin(theta/2) * axis, cos(theta/2))
+	 * note: axis.z == Q.k == zero
+	 */
+	float i = -n.y;
+	float j = n.x;
+	// float k = 0.0;
+	float w = 1.0 + cosT;
+
+	float m = inversesqrt(i*i + j*j + w*w);
+	i *= m;
+	j *= m;
+	w *= m;
+
+	float ii = i * i;
+	float jj = j * j;
+	float ww = w * w;
+
+	float ij2 = i * j * 2.0;
+	float iw2 = i * w * 2.0;
+	float jw2 = j * w * 2.0;
+
+	float x = bn.x;
+	float y = bn.y;
+	float z = bn.z;
+
+	/*
+	 * rotate the bumpped normal:
+	 *	Q * bn * conjugate(Q)
+	 */
+	return vec3(
+		x*(ii - jj + ww) + y*(ij2) + z*(jw2),
+		y*(jj + ww - ii) - z*(iw2) + x*(ij2),
+		z*(ww - ii - jj) - x*(jw2) + y*(iw2)
+	);
+}
+
 void main() {
 	vec3 normal = normalize(vNormal);
 
@@ -96,7 +151,8 @@ void main() {
 			float dt = 1.0 / float(textureSize(uBumpTexture, 0).s);
 			float scale = uBumpStrength * vTexScale;
 			vec3 bn = bumpNormal(dt, scale);
-			tn = normalize(mix(tn, bn, 0.25));
+			//tn = normalize(mix(tn, bn, 0.5));
+			tn = normalize(tn + bumpRotate(tn, bn));
 		}
 		normal = normalize(tm * tn);
 	}
@@ -120,7 +176,7 @@ void main() {
 		float m = texture(uSpecularTexture, vTexCoord).r;
 		m = m * SPECULAR_SCALE + SPECULAR_BIAS;
 		float spec = KS_Skin_Specular(normal, uLightDirection, v, m, 1.0);
-		specular = vec3(1.0) * spec;
+		specular = clamp(uAmbientColor + uLightColor, 0.0, 1.0) * spec;
 	}
 
 	vec3 color = ambient + diffuse + specular;

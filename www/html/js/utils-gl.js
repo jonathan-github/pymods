@@ -1832,7 +1832,7 @@ GL.Uniform3f = utils.extend(GL.Uniform, {
 
 GL.Uniform4f = utils.extend(GL.Uniform, {
     suffix: '4fv',
-    size: 3,
+    size: 4,
 
     flush: function() {
         if (!this.dirty) {
@@ -1851,6 +1851,7 @@ GL.Uniform4f = utils.extend(GL.Uniform, {
 
 GL.UniformMatrix4f = utils.extend(GL.Uniform, {
     suffix: 'Matrix4fv',
+    size: 16,
     matrix: [4, 4],
 
     set: function(value, transpose) {

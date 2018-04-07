@@ -38,6 +38,20 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
 	return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 }
 
+vec3 specular(vec3 N, vec3 V, vec3 L, vec3 light, float roughness, vec3 F0) {
+        vec3 H = normalize(V + L);
+        float NdotL = max(dot(N, L), 0.0);        
+
+        // Cook-Torrance BRDF
+        float NDF = DistributionGGX(N, H, roughness);   
+        float G   = GeometrySmith(N, V, L, roughness);      
+        vec3 F    = fresnelSchlick(max(dot(H, V), 0.0), F0);
+           
+        vec3 nominator    = NDF * G * F; 
+        float denominator = 4.0 * max(dot(N, V), 0.0) * NdotL + 0.001; // 0.001 to prevent divide by zero.
+        return (nominator / denominator) * light * NdotL;
+}
+
 vec3 radiance(vec3 N, vec3 V, vec3 L, vec3 light, vec3 albedo, float roughness, vec3 F0, float metallic) {
         vec3 H = normalize(V + L);
         float NdotL = max(dot(N, L), 0.0);        

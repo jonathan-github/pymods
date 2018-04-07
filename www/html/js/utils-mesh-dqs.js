@@ -84,6 +84,9 @@ GL.MeshDqs = utils.extend(utils.Object, {
     /// draw materials w/cutouts
     passDrawCutouts: [],
 
+    /// draw transparent materials
+    passDrawTransparent: [],
+
     /// performance timers
     transformTimer: utils.EMA.create(utils.EMA.alphaN(100)),
     normalsTimer: utils.EMA.create(utils.EMA.alphaN(100)),
@@ -218,7 +221,7 @@ GL.MeshDqs = utils.extend(utils.Object, {
                 App.AMBIENT_ENABLE ?
                     App.ambientColor :
                     App.blackColor
-            );
+            ).dirty = true;
         }
     },
 
@@ -243,16 +246,13 @@ GL.MeshDqs = utils.extend(utils.Object, {
             program.useProgram();
             for (i = 0; i < n; ++i) {
                 var material = materials[i];
-                if (material.uniformGet('uTransparent')) {
-                    continue;
-                }
                 var mesh = material.mesh;
                 if (mesh.ENABLE) {
                     if (mesh != lastMesh) {
                         mesh.viewSet(program, pMatrix, vMatrix);
                         lastMesh = mesh;
                     }
-                    material.draw();
+                    material.draw(program);
                 }
             }
         }
@@ -271,7 +271,7 @@ GL.MeshDqs = utils.extend(utils.Object, {
                         mesh.viewSet(program, pMatrix, vMatrix);
                         lastMesh = mesh;
                     }
-                    material.drawTangents();
+                    material.drawTangents(program);
                 }
             }
         }
@@ -294,7 +294,7 @@ GL.MeshDqs = utils.extend(utils.Object, {
                         mesh.viewSet(program, pMatrix, vMatrix);
                         lastMesh = mesh;
                     }
-                    material.draw();
+                    material.draw(program);
                 }
             }
 
@@ -307,7 +307,33 @@ GL.MeshDqs = utils.extend(utils.Object, {
                 var material = materials[i];
                 var mesh = material.mesh;
                 if (mesh.ENABLE) {
-                    material.draw();
+                    material.draw(program);
+                }
+            }
+        }
+
+        /* draw transparent materials */
+        materials = this.passDrawTransparent;
+        n = materials.length;
+        if (n > 0) {
+            var lastMesh = null;
+            var program = this.materialProgram;
+            program.useProgram();
+
+            gl.disable(gl.CULL_FACE);
+            gl.depthMask(false);
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
+            for (i = 0; i < n; ++i) {
+                var material = materials[i];
+                var mesh = material.mesh;
+                if (mesh.ENABLE) {
+                    if (mesh != lastMesh) {
+                        mesh.viewSet(program, pMatrix, vMatrix);
+                        lastMesh = mesh;
+                    }
+                    material.draw(program);
                 }
             }
         }
@@ -383,26 +409,6 @@ GL.MeshDqs = utils.extend(utils.Object, {
                 { name: "shaders/mesh-fit.vert",
                   type: gl.VERTEX_SHADER,
                   defines: defines }
-/*
-                { name: "shaders/mesh-dqs-project.vert",
-                  type: gl.VERTEX_SHADER,
-                  defines: defines },
-                { name: "shaders/mesh-constraints.vert",
-                  type: gl.VERTEX_SHADER,
-                  defines: defines },
-                { name: "shaders/mesh-normals-debug.vert",
-                  type: gl.VERTEX_SHADER,
-                  defines: defines },
-                { name: "shaders/mesh-normals-debug.frag",
-                  type: gl.FRAGMENT_SHADER,
-                  defines: defines  },
-                { name: "shaders/mesh-fit-debug.vert",
-                  type: gl.VERTEX_SHADER,
-                  defines: defines  },
-                { name: "shaders/mesh-fit-debug.frag",
-                  type: gl.FRAGMENT_SHADER,
-                  defines: defines  }
-*/
             ],
             programs: [
                 { name: "dqsBonesProgram",
@@ -447,28 +453,6 @@ GL.MeshDqs = utils.extend(utils.Object, {
                       'vCoord'
                   ],
                   bufferMode: gl.SEPARATE_ATTRIBS }
-/*
-                { name: "projectApplyProgram",
-                  vertexShader: "shaders/mesh-dqs-project.vert",
-                  fragmentShader: "shaders/mesh-dqs.frag",
-                  varyings: [
-                      'vCoord'
-                  ],
-                  bufferMode: gl.SEPARATE_ATTRIBS },
-                { name: "constraintsProgram",
-                  vertexShader: "shaders/mesh-constraints.vert",
-                  fragmentShader: "shaders/mesh-dqs.frag",
-                  varyings: [
-                      'vCoord'
-                  ],
-                  bufferMode: gl.SEPARATE_ATTRIBS },
-                { name: "normalsDebugProgram",
-                  vertexShader: "shaders/mesh-normals-debug.vert",
-                  fragmentShader: "shaders/mesh-normals-debug.frag" },
-                { name: "fitDebugProgram",
-                  vertexShader: "shaders/mesh-fit-debug.vert",
-                  fragmentShader: "shaders/mesh-fit-debug.frag" }
-*/
             ]
         });
     },
@@ -507,7 +491,6 @@ GL.MeshDqs = utils.extend(utils.Object, {
             params: {
                 MAG_FILTER: gl.LINEAR,
                 MIN_FILTER: gl.LINEAR_MIPMAP_LINEAR,
-                MIN_FILTER: gl.LINEAR,
                 WRAP_S: gl.CLAMP_TO_EDGE,
                 WRAP_T: gl.CLAMP_TO_EDGE
             }
@@ -1327,7 +1310,7 @@ GL.MeshDqs = utils.extend(utils.Object, {
             var lightDir = this.lightDirection;
             vec3.transformMat3(lightDir, App.lightDirection, ivMatrix);
             program.uniforms.uLightDirection.set(lightDir).dirty = true;
-            program.uniforms.uLightColor.set(App.lightColor);
+            program.uniforms.uLightColor.set(App.lightColor).dirty = true;
         }
     },
 
@@ -1348,23 +1331,6 @@ GL.MeshDqs = utils.extend(utils.Object, {
                              this.numIndices,
                              gl.UNSIGNED_INT, 0);
     },
-
-/*
-    fitDebugDraw: function() {
-        var context = App.context;
-        var gl = context.gl;
-        var program = this.fitDebugProgram;
-
-        program.uniforms.uCoordsBase.set(this.fitBase.uCoordsUniform);
-        program.uniforms.uCoordsTarget.set(this.uCoordsTargetUniform);
-        program.flush();
-        this.fitDebugVAO.bind();
-        this.fitDebugVAO.flush();
-        context.drawArrays(gl.LINES, 0, this.aCoordFitLen);
-        //context.drawArrays(gl.POINTS, 0, this.aCoordFitLen);
-        this.fitDebugVAO.unbind();
-    },
-*/
 
     animate: function(sampler, t) {
         var coords = App.coordsBlock.array;
@@ -1476,7 +1442,11 @@ GL.Material = utils.extend(utils.Object, {
             if (this.cutoutTexture) {
                 GL.MeshDqs.passDrawCutouts.push(this);
             } else {
-                GL.MeshDqs.passDraw.push(this);
+                if (this.uniformGet('uTransparent')) {
+                    GL.MeshDqs.passDrawTransparent.push(this);
+                } else {
+                    GL.MeshDqs.passDraw.push(this);
+                }
             }
         }
         console.log(material.id, this.info());
@@ -1588,9 +1558,14 @@ GL.Material = utils.extend(utils.Object, {
 	    }
         }
     },
+
     initSSS: function() {
         var gl = App.context.gl;
         var tex = this.diffuseTexture;
+        if (tex.sssTexture) {
+            /* already initialized */
+            return;
+        }
 
         tex.sssTexture = GL.Texture.create({
             name: tex.name + ".sss"
@@ -1655,11 +1630,10 @@ GL.Material = utils.extend(utils.Object, {
         }
     },
 
-    draw: function() {
+    draw: function(program) {
         var context = App.context;
         var gl = context.gl;
         var mesh = this.mesh;
-        var program = GL.MeshDqs.materialProgram;
 
         GL.MeshDqs.IMMEDIATE && mesh.coordsCopy();
         GL.MeshDqs.IMMEDIATE && mesh.normalsCopy();
@@ -1690,11 +1664,10 @@ GL.Material = utils.extend(utils.Object, {
         }
     },
 
-    drawTangents: function() {
+    drawTangents: function(program) {
         var context = App.context;
         var gl = context.gl;
         var mesh = this.mesh;
-        var program = GL.MeshDqs.materialTangentsProgram;
 
         program.uniforms.uCoords.set(mesh.uCoordsUniform);
         program.uniforms.uNormals.set(mesh.uNormalsUniform);

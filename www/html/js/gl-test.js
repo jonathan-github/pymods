@@ -3,6 +3,7 @@ utils.debug = 0;
 
 var App = utils.extend(utils.WebVR, {
     VR_ENABLE: true,
+    LIGHT: 0.50,
     TEXTURES_ENABLE: true,
     AMBIENT_ENABLE: true,
     SPECULAR_ENABLE: true,
@@ -128,7 +129,7 @@ var App = utils.extend(utils.WebVR, {
         this.blackColor = vec3.fromValues(0.0, 0.0, 0.0);
         this.whiteColor = vec3.fromValues(1.0, 1.0, 1.0);
         this.ambientColor = vec3.fromValues(0.2, 0.2, 0.2);
-        this.lightColor = vec3.fromValues(0.6, 0.6, 0.6);
+        this.lightColor = vec3.fromValues(this.LIGHT, this.LIGHT, this.LIGHT);
         this.lightDirection = vec3.fromValues(0.85, 0.8, 0.75);
         vec3.normalize(this.lightDirection, this.lightDirection);
 
@@ -151,10 +152,7 @@ var App = utils.extend(utils.WebVR, {
         var poses = assets.poses;
         for (i = 0, n = poses.length; i < n; ++i) {
             var pose = poses[i];
-            this.poses.push({
-                name: pose.config.name,
-                keyFrames: pose.responseJSON()
-            });
+            this.poses.push(this.posePatch(pose));
         }
         this.poseSelect(this.poses[0]);
 
@@ -166,6 +164,23 @@ var App = utils.extend(utils.WebVR, {
         /* release the library and texture cache (only needed during loading) */
         this.library = null;
         this.textureCache = null;
+    },
+
+    posePatch: function(pose) {
+        var name = pose.config.name;
+        var keyFrames = pose.responseJSON();
+        return {
+            name: name,
+            keyFrames: keyFrames
+        };
+    },
+    poseScale: function(keys, scale) {
+        var scaled = [];
+        for (var i = 0, n = keys.length; i < n; ++i) {
+            var key = keys[i];
+            scaled.push([key[0], key[1] * scale]);
+        }
+        return scaled;
     },
 
     textureGet: function(image, config) {
@@ -262,6 +277,7 @@ var App = utils.extend(utils.WebVR, {
             this.uiClothesEnableCreate(elements);
             this.uiConstraintsEnableCreate(elements);
         }
+        this.uiLightCreate(elements);
         this.uiAnimSpeedCreate(elements);
 
         var tb = utils.TableBuilder.create();
@@ -482,6 +498,33 @@ var App = utils.extend(utils.WebVR, {
     },
     uiConstraintsEnableClick: function() {
         this.animResync = true;
+    },
+
+    uiLightCreate: function(elements) {
+        this.uiLightLabel = document.createElement('span');
+        utils.contentText(this.uiLightLabel, "Light");
+        this.uiLight = document.createElement('input');
+        this.uiLight.type = 'range';
+        this.uiLight.min = '0';
+        this.uiLight.max = '1';
+        this.uiLight.step = '0.05';
+        this.uiLight.value = this.LIGHT.toString();
+        utils.on(this.uiLight, 'input', this.uiLightInput, this);
+        elements.push({label: this.uiLightLabel, ui: this.uiLight});
+    },
+    uiLightInput: function() {
+        var value = parseFloat(this.uiLight.value);
+        this.LIGHT = value;
+        vec3.set(this.lightColor, value, value, value);
+        var ambient = Math.min(0.2, value);
+        vec3.set(this.ambientColor, ambient, ambient, ambient);
+
+        utils.contentText(
+            this.uiLightLabel,
+            (value == 0
+             ? "Light Off"
+             : "Light " + (value * 100).toFixed(0) + "%")
+        );
     },
 
     uiAnimSpeedCreate: function(elements) {
@@ -738,17 +781,19 @@ var App = utils.extend(utils.WebVR, {
             this.reportTime = end;
             this.overlay.show({
                 "fps": (frames / elapsed * 1000).toFixed(2),
-                "render": this.renderTimer.ema.toFixed(2) + " ms",
                 "animate": this.animateTimer.ema.toFixed(2) + " ms",
                 "DQS": GL.MeshDqs.transformTimer.ema.toFixed(2) + " ms",
                 "fit": GL.MeshDqs.meshFitTimer.ema.toFixed(2) + " ms",
                 "normals": GL.MeshDqs.normalsTimer.ema.toFixed(2) + " ms",
                 "tangents": GL.MeshDqs.tangentsTimer.ema.toFixed(2) + " ms",
-                "draw": this.drawTimer.ema.toFixed(2) + " ms"
-            }, ["fps", "render", "animate", "DQS",
+                "draw": this.drawTimer.ema.toFixed(2) + " ms",
+                "total": this.renderTimer.ema.toFixed(2) + " ms"
+            }, ["fps",
+                "animate", "DQS",
                 "fit",
                 "normals", "tangents",
-                "draw"]);
+                "draw",
+                "total"]);
         }
     },
 
