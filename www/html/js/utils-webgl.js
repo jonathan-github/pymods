@@ -17,14 +17,17 @@ utils.App = {
 	['experimental-webgl', 1]
     ],
 
-    initCanvas: function() {
-	utils.debug && console.log("initCanvas");
-	this.canvas = document.createElement('canvas');
-	this.canvas.style.display = 'block';
-	utils.userSelectSet(this.canvas, 'none');
-	document.body.appendChild(this.canvas);
-	this.initContext();
-	this.initLoader();
+    initCanvas: function(config) {
+        utils.debug && console.log("initCanvas");
+        this.canvas = document.createElement('canvas');
+        if (config && config.id) {
+            this.canvas.id = config.id;
+        }
+        this.canvas.style.display = 'block';
+        utils.userSelectSet(this.canvas, 'none');
+        document.body.appendChild(this.canvas);
+        this.initContext();
+        this.initLoader();
     },
 
     initContext: function() {
@@ -77,8 +80,11 @@ utils.App = {
     },
 
     initLoader: function() {
-	this.loader = utils.AssetLoader.create({
-	    ready: this.ready,
+        if (this.loader) {
+            return;
+        }
+        this.loader = utils.AssetLoader.create({
+            ready: this.ready,
 	    error: this.error,
 	    scope: this
 	});
