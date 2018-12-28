@@ -214,6 +214,9 @@ for url in args.figures:
                         image['json']['url']
                     ))
                     im = PIL.Image.open(textureSrc)
+                    if im.mode == 'RGBX':
+                        im = im.convert('RGB')
+                        pass
                     im.save(textureFilePng, 'PNG', optimize=True)
                     shutil.copystat(textureSrc, textureFilePng)
                     pass
