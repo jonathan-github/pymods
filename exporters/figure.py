@@ -479,7 +479,12 @@ class LibraryExporter:
 
             specularMap = material.propFind('extra',
                                             'studio_material_channels',
-                                            'Glossy Layered Weight')
+                                            'Dual Lobe Specular Reflectivity')
+            if specularMap is None:
+                specularMap = material.propFind('extra',
+                                                'studio_material_channels',
+                                                'Glossy Layered Weight')
+                pass
             if specularMap:
                 specularMapRec = {}
                 image_file = specularMap.get('image_file')
