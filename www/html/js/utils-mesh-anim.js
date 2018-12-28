@@ -87,28 +87,46 @@ utils.KeyFrameSampler = utils.extend(utils.Object, {
     sample: function(t) {
         var keys = this.keys;
         var n = keys.length;
+        var keyIdx = this.keyIdx;
         var key0 = this.key0;
         var key1 = this.key1;
         if (key0 == null || t < key0[0]) {
-            /* restart */
-            this.keyIdx = 0;
-            this.key0 = key0 = keys[0];
-            if (n > 1) {
-                this.key1 = key1 = keys[1];
+            /* search for previous frame */
+            if (keyIdx > 0 && keys[keyIdx - 1][0] <= t) {
+                key1 = key0;
+                key0 = keys[--keyIdx];
             } else {
-                this.key1 = key1 = null;
+                /* restart */
+                keyIdx = 0;
+                key0 = keys[0];
+                if (n > 1) {
+                    key1 = keys[1];
+                } else {
+                    key1 = null;
+                }
             }
         }
 
-        while (key1 && t >= key1[0]) {
-            /* find next key pair */
-            this.key0 = key0 = key1;
-            if (++this.keyIdx < n) {
-                this.key1 = key1 = keys[this.keyIdx + 1];
-            } else {
-                this.key1 = key1 = null;
-                break;
+        if (key1 && t >= key1[0]) {
+            /* search for next frame */
+            for (;;) {
+                ++keyIdx;
+                key0 = key1;
+                if (keyIdx + 1 < n) {
+                    key1 = keys[keyIdx + 1];
+                    if (t < key1[0]) {
+                        break;
+                    }
+                } else {
+                    key1 = null;
+                    break;
+                }
             }
+        }
+        if (this.keyIdx != keyIdx) {
+            this.keyIdx = keyIdx;
+            this.key0 = key0;
+            this.key1 = key1;
         }
 
         var t0 = key0[0];
@@ -185,9 +203,9 @@ utils.KeyFrameQuatSampler = utils.extend(utils.KeyFrameSampler, {
 
     interpolate: function(a, b, s) {
         var q = this.q;
-        quat.slerp(q, a, b, s);
-        //quat.lerp(q, a, b, s);
-        //quat.normalize(q, q);
+        //quat.slerp(q, a, b, s);
+        quat.lerp(q, a, b, s);
+        quat.normalize(q, q);
         return q;
     },
 
@@ -443,7 +461,7 @@ utils.KeyFrameMapSampler = utils.extend(utils.Object, {
             t = 0;
         } else {
             var dt = t - this.t;
-            if (dt >= this.duration) {
+            if (dt >= this.duration && !this.oneshot) {
                 /* loop the animation */
                 var skipped = Math.floor(dt / this.duration);
                 this.t += skipped * this.duration;
@@ -452,6 +470,7 @@ utils.KeyFrameMapSampler = utils.extend(utils.Object, {
             t = dt;
         }
 
+        this.dt = t;
         this.outputBones(t);
         if (App.MORPHS_ENABLE) {
             //this.outputMorphs(t);
@@ -750,3 +769,352 @@ utils.ModifierController = utils.extend(utils.Object, {
 	return value;
     }
 });
+
+utils.linearInterpY = function(x0, y0, x1, y1, x) {
+    return y0 + (y1 - y0) * (x - x0) / (x1 - x0);
+};
+
+/**
+ * Pose converter.
+ */
+utils.PoseConverter = {
+    POSE_PATCHES: {
+        "wrist circle": function(pose) {
+            var keys = pose.keyFrames['rFoot/rotation/y'];
+            if (keys) {
+                for (var i = 0, n = keys.length; i < n; ++i) {
+                    var key = keys[i];
+                    if (i >= 17 && i <= 20) {
+                        // 17 -3.0855
+                        // 18 -2.4424
+                        // 19 -1.9610
+                        // 20 -2.1254
+                        key[1] = utils.linearInterpY(
+                            16, keys[16][1],
+                            21, keys[21][1],
+                            i
+                        );
+                    } else if (i >= 22 && i <= 24) {
+                        // 22 -8.5064
+                        // 23 -15.289
+                        // 24 -19.574
+                        key[1] = utils.linearInterpY(
+                            21, keys[21][1],
+                            25, keys[25][1],
+                            i
+                        );
+                    } else if (i >= 25) {
+                        break;
+                    }
+                }
+            }
+            //return this.poseLoopReverse(rec);
+            return pose;
+        }
+    },
+
+    convert: function(poseAsset, baseFigure) {
+        var config = poseAsset.config;
+        var name = config.name;
+        var keyFrames = poseAsset.responseJSON();
+        var pose = {
+            name: name,
+            config: poseAsset.config,
+            keyFrames: keyFrames
+        };
+        if (name) {
+            var patcher = this.POSE_PATCHES[name];
+            if (patcher) {
+                pose = patcher.call(this, pose);
+            }
+        }
+        if (baseFigure != config.baseFigure) {
+            var converted = false;
+            switch (config.baseFigure) {
+            case 'Genesis2Female':
+                switch (baseFigure) {
+                case 'Genesis3Female':
+                    pose = this.convertG2toG3(pose);
+                    converted = true;
+                    break;
+                }
+                break;
+            case 'Genesis3Female':
+                switch (baseFigure) {
+                case 'Genesis8Female':
+                    pose = this.convertG3toG8(pose);
+                    converted = true;
+                    break;
+                }
+                break;
+            case 'Genesis8Female':
+                switch (baseFigure) {
+                case 'Genesis3Female':
+                    pose = this.convertG8toG3(pose);
+                    converted = true;
+                    break;
+                }
+                break;
+            }
+            console.log(
+                converted ? "converted" : "no conversion",
+                name,
+                config.baseFigure,
+                baseFigure
+            );
+        }
+        var smoothing = config.smoothing;
+        if (smoothing != undefined) {
+            while (smoothing-- > 0) {
+                pose = this.applySmoothing(pose);
+            }
+        }
+        return pose;
+    },
+
+    applySmoothing: function(pose) {
+        for (var ctrl in pose.keyFrames) {
+            var keys = pose.keyFrames[ctrl];
+            var n = keys.length - 1;
+            if (n > 3) {
+                var vp = keys[0][1];
+                for (var i = 1; i < n; ++i) {
+                    var key = keys[i];
+                    var vi = keys[i][1];
+                    var vn = keys[i + 1][1];
+                    //keys[i][1] = (vp + vi + vn) / 3;
+                    keys[i][1] = (0.25 * vp + 0.5 * vi + 0.25 * vn);
+                    vp = vi;
+                }
+            }
+        }
+        return pose;
+    },
+
+    applyDelta: function(pose, ctrl, delta) {
+        var keys = pose.keyFrames[ctrl];
+        if (keys) {
+            for (var i = 0, n = keys.length; i < n; ++i) {
+                var key = keys[i];
+                key[1] += delta;
+            }
+        } else {
+            pose.keyFrames[ctrl] = [[0, delta]];
+        }
+        return pose;
+    },
+    applyRenamePrefix: function(pose, ctrlOld, ctrlNew) {
+        var keyFrames = pose.keyFrames;
+        var key = ctrlOld + "/";
+        var len = ctrlOld.length;
+        var remove = [];
+        for (var ctrl in keyFrames) {
+            if (ctrl.startsWith(key)) {
+                var newKey = ctrlNew + ctrl.substring(len);
+                var keys = keyFrames[ctrl];
+                utils.assert && utils.assert(
+                    pose.keyFrames[newKey] == undefined,
+                    "rename " + ctrl + " would overwrite " + newKey
+                );
+                keyFrames[newKey] = keys;
+                remove.push(ctrlOld);
+            }
+        }
+        for (var i = 0, n = remove.length; i < n; ++i) {
+            delete keyFrames[remove[i]];
+        }
+        return pose;
+    },
+    applyRename: function(pose, ctrlOld, ctrlNew) {
+        var keyFrames = pose.keyFrames;
+        var keys = keyFrames[ctrlOld];
+        utils.assert && utils.assert(
+            pose.keyFrames[ctrlNew] == undefined,
+            "rename " + ctrlOld + " would overwrite " + ctrlNew
+        );
+        keyFrames[ctrlNew] = keys;
+        delete keyFrames[ctrlOld];
+        return pose;
+    },
+
+    loopReverse: function(pose) {
+        var ctrls = pose.keyFrames;
+        var endTs = 0;
+        for (var ctrl in ctrls) {
+            var keys = ctrls[ctrl];
+            var n = keys.length;
+            var key = keys[n - 1];
+            if (endTs < key[0]) {
+                endTs = key[0];
+            }
+        }
+        for (var ctrl in ctrls) {
+            var keys = ctrls[ctrl];
+            var n = keys.length;
+            if (n > 1) {
+                for (var j = n - 1; j >= 0; --j) {
+                    var kj = keys[j];
+                    keys.push([2 * endTs - kj[0], kj[1]]);
+                }
+            }
+        }
+        return pose;
+    },
+
+    convertG2toG3: function(pose) {
+        pose = this.applyRenamePrefix(pose, 'lForeArm', 'lForearm');
+        pose = this.applyRenamePrefix(pose, 'rForeArm', 'rForearm');
+        pose = this.applyRenamePrefix(pose, 'abdomen', 'abdomenLower');
+        pose = this.applyRenamePrefix(pose, 'abdomen2', 'abdomenUpper');
+        pose = this.applyRenamePrefix(pose, 'chest', 'chestLower');
+        pose = this.applyRenamePrefix(pose, 'neck', 'neckLower');
+
+        pose = this.applyRename(pose, 'lForearm/rotation/x', 'lForearmTwist/rotation/x');
+        pose = this.applyRename(pose, 'rForearm/rotation/x', 'rForearmTwist/rotation/x');
+        pose = this.applyRename(pose, 'lForearm/rotation/y', 'lForearmBend/rotation/y');
+        pose = this.applyRename(pose, 'rForearm/rotation/y', 'rForearmBend/rotation/y');
+        pose = this.applyRename(pose, 'lForearm/rotation/z', 'lForearmBend/rotation/z');
+        pose = this.applyRename(pose, 'rForearm/rotation/z', 'rForearmBend/rotation/z');
+
+        pose = this.applyRename(pose, 'lShldr/rotation/x', 'lShldrTwist/rotation/x');
+        pose = this.applyRename(pose, 'rShldr/rotation/x', 'rShldrTwist/rotation/x');
+        pose = this.applyRename(pose, 'lShldr/rotation/y', 'lShldrBend/rotation/y');
+        pose = this.applyRename(pose, 'rShldr/rotation/y', 'rShldrBend/rotation/y');
+        pose = this.applyRename(pose, 'lShldr/rotation/z', 'lShldrBend/rotation/z');
+        pose = this.applyRename(pose, 'rShldr/rotation/z', 'rShldrBend/rotation/z');
+
+        pose = this.applyRename(pose, 'lThigh/rotation/x', 'lThighBend/rotation/x');
+        pose = this.applyRename(pose, 'rThigh/rotation/x', 'rThighBend/rotation/x');
+        pose = this.applyRename(pose, 'lThigh/rotation/z', 'lThighBend/rotation/z');
+        pose = this.applyRename(pose, 'rThigh/rotation/z', 'rThighBend/rotation/z');
+        pose = this.applyRename(pose, 'lThigh/rotation/y', 'lThighTwist/rotation/y');
+        pose = this.applyRename(pose, 'rThigh/rotation/y', 'rThighTwist/rotation/y');
+
+        pose = this.applyDelta(pose, 'lShldrBend/rotation/y', -0.4);
+        pose = this.applyDelta(pose, 'rShldrBend/rotation/y', 0.4);
+        pose = this.applyDelta(pose, 'lShldrBend/rotation/z', 1.7);
+        pose = this.applyDelta(pose, 'rShldrBend/rotation/z', -1.7);
+
+        pose = this.applyDelta(pose, 'lForearmBend/rotation/y', -1.5);
+        pose = this.applyDelta(pose, 'rForearmBend/rotation/y', 1.5);
+        pose = this.applyDelta(pose, 'lForearmTwist/rotation/x', -4);
+        pose = this.applyDelta(pose, 'rForearmTwist/rotation/x', -4);
+
+        pose = this.applyDelta(pose, 'lHand/rotation/y', -2);
+        pose = this.applyDelta(pose, 'rHand/rotation/y', 2);
+        pose = this.applyDelta(pose, 'lHand/rotation/z', 1.5);
+        pose = this.applyDelta(pose, 'rHand/rotation/z', -1.5);
+
+        pose = this.applyDelta(pose, 'lThumb2/rotation/z', -16);
+        pose = this.applyDelta(pose, 'rThumb2/rotation/z', 16);
+        pose = this.applyDelta(pose, 'lThumb3/rotation/z', -14);
+        pose = this.applyDelta(pose, 'rThumb3/rotation/z', 14);
+
+        pose = this.applyDelta(pose, 'lIndex1/rotation/z', -22);
+        pose = this.applyDelta(pose, 'rIndex1/rotation/z', 22);
+        pose = this.applyDelta(pose, 'lIndex2/rotation/z', -22);
+        pose = this.applyDelta(pose, 'rIndex2/rotation/z', 22);
+        pose = this.applyDelta(pose, 'lIndex3/rotation/z', -14);
+        pose = this.applyDelta(pose, 'rIndex3/rotation/z', 14);
+
+        pose = this.applyDelta(pose, 'lMid1/rotation/z', -23);
+        pose = this.applyDelta(pose, 'rMid1/rotation/z', 23);
+        pose = this.applyDelta(pose, 'lMid2/rotation/z', -23);
+        pose = this.applyDelta(pose, 'rMid2/rotation/z', 23);
+        pose = this.applyDelta(pose, 'lMid3/rotation/z', -18);
+        pose = this.applyDelta(pose, 'rMid3/rotation/z', 18);
+
+        pose = this.applyDelta(pose, 'lRing1/rotation/z', -23);
+        pose = this.applyDelta(pose, 'rRing1/rotation/z', 23);
+        pose = this.applyDelta(pose, 'lRing2/rotation/z', -23);
+        pose = this.applyDelta(pose, 'rRing2/rotation/z', 23);
+        pose = this.applyDelta(pose, 'lRing3/rotation/z', -18);
+        pose = this.applyDelta(pose, 'rRing3/rotation/z', 18);
+
+        pose = this.applyDelta(pose, 'lPinky1/rotation/z', -35);
+        pose = this.applyDelta(pose, 'rPinky1/rotation/z', 35);
+        pose = this.applyDelta(pose, 'lPinky2/rotation/z', -22);
+        pose = this.applyDelta(pose, 'rPinky2/rotation/z', 22);
+        pose = this.applyDelta(pose, 'lPinky3/rotation/z', -8);
+        pose = this.applyDelta(pose, 'rPinky3/rotation/z', 8);
+
+        pose = this.applyDelta(pose, 'lThighBend/rotation/z', -3.4*0.25);
+        pose = this.applyDelta(pose, 'rThighBend/rotation/z', 3.4*0.25);
+
+        pose = this.applyDelta(pose, 'lShin/rotation/y', 1);
+        pose = this.applyDelta(pose, 'rShin/rotation/y', 1);
+        pose = this.applyDelta(pose, 'lShin/rotation/z', -0.3);
+        pose = this.applyDelta(pose, 'rShin/rotation/z', -0.3);
+
+        pose = this.applyDelta(pose, 'lFoot/rotation/x', 20);
+        pose = this.applyDelta(pose, 'rFoot/rotation/x', 20);
+        pose = this.applyDelta(pose, 'lFoot/rotation/y', 2);
+        pose = this.applyDelta(pose, 'rFoot/rotation/y', 2);
+
+        return pose;
+    },
+
+    convertG8toG3New: function(pose) {
+        // shoulder/z 47 L -47 R
+        // elbow/y 15 L -15 R
+        // wrist/y -12.75 L 12.75 R
+        // hip/y 14 L -14 R  reversed???
+        // hip/z -7.5 L 7.5 R
+        // ankle/z 5 L -5 R
+        pose = this.applyDelta(pose, 'lShldrBend/rotation/z', -47);
+        pose = this.applyDelta(pose, 'rShldrBend/rotation/z', 47);
+        pose = this.applyDelta(pose, 'lForearmBend/rotation/y', -15);
+        pose = this.applyDelta(pose, 'rForearmBend/rotation/y', 15);
+        pose = this.applyDelta(pose, 'lHand/rotation/y', 12.75);
+        pose = this.applyDelta(pose, 'rHand/rotation/y', -12.75);
+
+        //pose = this.applyDelta(pose, 'lThighTwist/rotation/y', 14);
+        //pose = this.applyDelta(pose, 'rThighTwist/rotation/y', -14);
+        pose = this.applyDelta(pose, 'lThighTwist/rotation/y', 3);
+        pose = this.applyDelta(pose, 'rThighTwist/rotation/y', -3);
+
+        //pose = this.applyDelta(pose, 'lThighBend/rotation/z', 7.5);
+        //pose = this.applyDelta(pose, 'rThighBend/rotation/z', -7.5);
+        pose = this.applyDelta(pose, 'lThighBend/rotation/z', 8);
+        pose = this.applyDelta(pose, 'rThighBend/rotation/z', -8);
+
+        //pose = this.applyDelta(pose, 'lFoot/rotation/z', -5);
+        //pose = this.applyDelta(pose, 'rFoot/rotation/z', 5);
+        pose = this.applyDelta(pose, 'lFoot/rotation/z', -4);
+        pose = this.applyDelta(pose, 'rFoot/rotation/z', 4);
+
+        return pose;
+    },
+    convertG8toG3: function(pose) {
+        pose = this.applyDelta(pose, 'abdomenUpper/rotation/x', -0.15);
+        pose = this.applyDelta(pose, 'abdomenLower/rotation/x', 0.15);
+        pose = this.applyDelta(pose, 'lThighBend/rotation/z', 6);
+        pose = this.applyDelta(pose, 'rThighBend/rotation/z', -6);
+        pose = this.applyDelta(pose, 'lShldrBend/rotation/z', -45.6);
+        pose = this.applyDelta(pose, 'rShldrBend/rotation/z', 45.6);
+        return pose;
+    },
+    convertG3toG8: function(pose) {
+        pose = this.applyDelta(pose, 'abdomenUpper/rotation/x', 0.15);
+        pose = this.applyDelta(pose, 'abdomenLower/rotation/x', -0.15);
+        pose = this.applyDelta(pose, 'lThighBend/rotation/z', -6);
+        pose = this.applyDelta(pose, 'rThighBend/rotation/z', 6);
+        pose = this.applyDelta(pose, 'lShldrBend/rotation/z', 45.6);
+        pose = this.applyDelta(pose, 'rShldrBend/rotation/z', -45.6);
+        return pose;
+    },
+    convertG8toG3_old: function(pose) {
+        pose = this.applyDelta(pose, 'lThighBend/rotation/z', 7);
+        pose = this.applyDelta(pose, 'rThighBend/rotation/z', -7);
+        pose = this.applyDelta(pose, 'lShldrBend/rotation/z', -45);
+        pose = this.applyDelta(pose, 'rShldrBend/rotation/z', 45);
+        return pose;
+    },
+    convertG3toG8_old: function(pose) {
+        pose = this.applyDelta(pose, 'lThighBend/rotation/z', -7);
+        pose = this.applyDelta(pose, 'rThighBend/rotation/z', 7);
+        pose = this.applyDelta(pose, 'lShldrBend/rotation/z', 45);
+        pose = this.applyDelta(pose, 'rShldrBend/rotation/z', -45);
+        return pose;
+    }
+};
