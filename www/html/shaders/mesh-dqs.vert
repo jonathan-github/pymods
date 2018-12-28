@@ -7,6 +7,8 @@ precision highp sampler2D;
 /*
  * Transform feedback vertex shader to apply dual-quarternion linear blend skinning:
  *	Skinning with Dual Quarternins [Kavan 2007]
+ *
+ * Use this shader for meshes with multiple weight mapped bones.
  */
 
 #include "shaders/mesh-dqs.inc"
