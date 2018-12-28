@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>Animator</title>
+<style type="text/css">
+ul.ui-tree {
+  list-style-type: none;
+  margin: 0px;
+  padding: 0px;
+}
+.ui-expander-target {
+  cursor: pointer;
+}
+.ui-expander-label {
+  color: RoyalBlue;
+}
+.ui-cell-target {
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ui-cell-const {
+  white-space: nowrap;
+}
+.ui-cell-label {
+  padding-left: 4px;
+  color: DodgerBlue;
+}
+.ui-cell-selected {
+  background-color: Gold;
+}
+.ui-cell-selected .ui-cell-label {
+  color: DarkRed;
+}
+.ui-cell-const .ui-cell-value {
+  color: SlateGray;
+  background-color: #ddd;
+}
+body {
+  padding: 0px;
+  margin: 0px;
+}
+#viewport {
+  position: fixed;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  z-index: 2;
+}
+#toolbar {
+  position: fixed;
+  width: 64px;
+  right: 0px;
+  overflow: hidden;
+  z-index: 3;
+}
+.ui-toolbar-button {
+  text-align: center;
+  background-color: #f9f9f9;
+  padding-top: 2px;
+  cursor: pointer;
+}
+.ui-toolbar-button:hover {
+  background-color: LightSteelBlue;
+}
+.ui-toolbar-button-on {
+  background-color: Gold;
+}
+.ui-toolbar-button-off {
+}
+.ui-toolbar-button-on:hover {
+  background-color: Gold;
+}
+#canvas {
+  position: fixed;
+  overflow: hidden;
+  z-index: 1;
+}
+#graph {
+  flex-grow: 1;
+  order: 3;
+  overflow: hidden;
+}
+#keys {
+  flex-shrink: 0;
+  order: 1;
+  min-width: 220px;
+  background-color: #f9f9f9;
+  overflow-x: hidden;
+  overflow-y: auto;
+  box-shadow: -3px 3px 5px #ccc;
+}
+#keyCursor {
+  z-index: 10;
+  position: fixed;
+  width: 24px;
+  height: 24px;
+  color: magenta;
+  pointer-events: none;
+}
+#keyToolTip {
+  z-index: 11;
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  opacity: 0.75;
+  pointer-events: none;
+}
+#keyToolTip h1 {
+  color: white;
+  font-size: 16px;
+  margin: 0px;
+}
+#keyToolTip table {
+  background-color: LemonChiffon;
+  border: 1px solid #ccc;
+}
+</style>
+<link href="css/material-icons.css" rel="stylesheet">
+<script type="text/javascript" src="lib/js/gl-matrix-min.js"></script>
+<script type="text/javascript" src="js/dquat.js"></script>
+<script type="text/javascript" src="js/utils.js"></script>
+<script type="text/javascript" src="js/utils-ui.js"></script>
+<script type="text/javascript" src="js/utils-webgl.js"></script>
+<script type="text/javascript" src="js/utils-webvr.js"></script>
+<script type="text/javascript" src="js/utils-models.js"></script>
+<script type="text/javascript" src="js/utils-mesh.js"></script>
+<script type="text/javascript" src="js/utils-anim.js"></script>
+<script type="text/javascript" src="js/utils-gl-base.js"></script>
+<script type="text/javascript" src="js/utils-gl.js"></script>
+<script type="text/javascript" src="js/utils-mesh-dqs.js"></script>
+<script type="text/javascript" src="js/utils-mesh-anim.js"></script>
+<script type="text/javascript" src="js/modifiers.js"></script>
+<script type="text/javascript" src="js/animator.js"></script>
+</head>
+
+<body onload="App.init();"></body>
+
+</html>
