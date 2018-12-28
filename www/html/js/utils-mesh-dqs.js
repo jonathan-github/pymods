@@ -81,6 +81,9 @@ GL.MeshDqs = utils.extend(utils.Object, {
     /// draw materials w/tangent space texture maps
     passDrawTangents: [],
 
+    /// draw materials w/tangent space texture maps and cutouts
+    passDrawTangentsCutouts: [],
+
     /// draw materials w/cutouts
     passDrawCutouts: [],
 
@@ -230,7 +233,7 @@ GL.MeshDqs = utils.extend(utils.Object, {
         var gl = context.gl;
 
         gl.enable(gl.DEPTH_TEST);
-	gl.depthMask(true);
+        gl.depthMask(true);
         gl.depthFunc(gl.LESS);
         gl.disable(gl.BLEND);
         gl.enable(gl.CULL_FACE);
@@ -276,25 +279,51 @@ GL.MeshDqs = utils.extend(utils.Object, {
             }
         }
 
-        materials = this.passDrawCutouts;
-        n = materials.length;
-        if (n > 0) {
-            var lastMesh = null;
-            var program = this.materialProgram;
-            program.useProgram();
-
+        var tangentsCutouts = this.passDrawTangentsCutouts;
+        var cutouts = this.passDrawCutouts;
+        if (tangentsCutouts.length > 0 ||
+            cutouts.length > 0) {
             /* depth pass */
+            gl.depthMask(true);
+            gl.disable(gl.BLEND);
             gl.disable(gl.CULL_FACE);
-            program.uniforms.uCutoutBlend.set(false);
-            for (i = 0; i < n; ++i) {
-                var material = materials[i];
-                var mesh = material.mesh;
-                if (mesh.ENABLE) {
-                    if (mesh != lastMesh) {
-                        mesh.viewSet(program, pMatrix, vMatrix);
-                        lastMesh = mesh;
+
+            var lastMesh = null;
+            materials = tangentsCutouts;
+            n = materials.length;
+            if (n > 0) {
+                var program = this.materialTangentsProgram;
+                program.useProgram();
+                program.uniforms.uCutoutBlend.set(false);
+                for (i = 0; i < n; ++i) {
+                    var material = materials[i];
+                    var mesh = material.mesh;
+                    if (mesh.ENABLE) {
+                        if (mesh != lastMesh) {
+                            mesh.viewSet(program, pMatrix, vMatrix);
+                            lastMesh = mesh;
+                        }
+                        material.drawTangents(program);
                     }
-                    material.draw(program);
+                }
+            }
+
+            materials = cutouts;
+            n = materials.length;
+            if (n > 0) {
+                var program = this.materialProgram;
+                program.useProgram();
+                program.uniforms.uCutoutBlend.set(false);
+                for (i = 0; i < n; ++i) {
+                    var material = materials[i];
+                    var mesh = material.mesh;
+                    if (mesh.ENABLE) {
+                        if (mesh != lastMesh) {
+                            mesh.viewSet(program, pMatrix, vMatrix);
+                            lastMesh = mesh;
+                        }
+                        material.draw(program);
+                    }
                 }
             }
 
@@ -302,12 +331,34 @@ GL.MeshDqs = utils.extend(utils.Object, {
             gl.depthMask(false);
             gl.enable(gl.BLEND);
             gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-            program.uniforms.uCutoutBlend.set(true);
-            for (i = 0; i < n; ++i) {
-                var material = materials[i];
-                var mesh = material.mesh;
-                if (mesh.ENABLE) {
-                    material.draw(program);
+
+            materials = tangentsCutouts;
+            n = materials.length;
+            if (n > 0) {
+                var program = this.materialTangentsProgram;
+                program.useProgram();
+                program.uniforms.uCutoutBlend.set(true);
+                for (i = 0; i < n; ++i) {
+                    var material = materials[i];
+                    var mesh = material.mesh;
+                    if (mesh.ENABLE) {
+                        material.drawTangents(program);
+                    }
+                }
+            }
+
+            materials = cutouts;
+            n = materials.length;
+            if (n > 0) {
+                var program = this.materialProgram;
+                program.useProgram();
+                program.uniforms.uCutoutBlend.set(true);
+                for (i = 0; i < n; ++i) {
+                    var material = materials[i];
+                    var mesh = material.mesh;
+                    if (mesh.ENABLE) {
+                        material.draw(program);
+                    }
                 }
             }
         }
@@ -506,6 +557,7 @@ GL.MeshDqs = utils.extend(utils.Object, {
      */
     init: function(config) {
         this.config = config;
+        this.baseFigure = config.baseFigure || config.mesh.figure.id;
         this.mvMatrix = mat4.create();
         this.nMatrix = mat4.create();
         this.ivMatrix = mat3.create();
@@ -1437,7 +1489,11 @@ GL.Material = utils.extend(utils.Object, {
         this.initTextures();
         if (this.normalTexture) {
             GL.MeshDqs.passTangents.push(this);
-            GL.MeshDqs.passDrawTangents.push(this);
+            if (this.cutoutTexture) {
+                GL.MeshDqs.passDrawTangentsCutouts.push(this);
+            } else {
+                GL.MeshDqs.passDrawTangents.push(this);
+            }
         } else {
             if (this.cutoutTexture) {
                 GL.MeshDqs.passDrawCutouts.push(this);
@@ -1449,7 +1505,7 @@ GL.Material = utils.extend(utils.Object, {
                 }
             }
         }
-        console.log(material.id, this.info());
+        //console.log(material.id, this.info());
         return this;
     },
     info: function() {
@@ -1690,7 +1746,8 @@ GL.Material = utils.extend(utils.Object, {
         if (this.bumpTextureUniform && App.BUMP_MAP_ENABLE) {
             program.uniforms.uHasBumpTexture.set(true);
             program.uniforms.uBumpTexture.set(this.bumpTextureUniform);
-            program.uniforms.uBumpStrength.set(this.bumpStrength * 0.1);
+            var bumpScale = this.uniformGet('uBumpStrength') || 0.1;
+            program.uniforms.uBumpStrength.set(this.bumpStrength * bumpScale);
         } else {
             // TBD: need dummy texture
             program.uniforms.uHasBumpTexture.set(false);
@@ -1701,6 +1758,13 @@ GL.Material = utils.extend(utils.Object, {
         } else {
             // TBD: need dummy texture
             program.uniforms.uHasSpecularTexture.set(false);
+        }
+        if (this.cutoutTextureUniform) {
+            program.uniforms.uHasCutoutTexture.set(true);
+            program.uniforms.uCutoutTexture.set(this.cutoutTextureUniform);
+        } else {
+            // TBD: need dummy textures
+            program.uniforms.uHasCutoutTexture.set(false);
         }
         this.uniformsSet(program);
         program.flush();
