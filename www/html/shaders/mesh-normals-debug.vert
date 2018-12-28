@@ -26,6 +26,11 @@ uniform sampler2D uCoords;
  */
 uniform sampler2D uNormals;
 
+/**
+ * Color mode
+ */
+uniform int uColorMode;
+
 out vec3 vColor;
 
 void main() {
@@ -36,7 +41,14 @@ void main() {
 	gl_Position = pMatrix * vMatrix * mMatrix * vec4(coord, 1.0);
 
 	// convert normal to color
-	vColor = (normal + 1.0) / 2.0;
+	if (uColorMode == 0) {
+		vColor = (normal + 1.0) / 2.0;
+	} else if (uColorMode == 1) {
+		vColor = vec3((normal.g + 1.0) / 2.0);
+	} else if (uColorMode == 2) {
+		vColor = vec3((normal.g * normal.b + 1.0) / 2.0);
+	}
 
 	//vColor = vec3((normal.g + 1.0) / 2.0);
+	//vColor = vec3((normal.g * normal.b + 1.0) / 2.0);
 }
