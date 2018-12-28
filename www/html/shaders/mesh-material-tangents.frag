@@ -27,6 +27,11 @@ uniform float uBumpStrength;
 uniform bool uHasSpecularTexture;
 uniform sampler2D uSpecularTexture;
 
+uniform bool uHasCutoutTexture;
+uniform sampler2D uCutoutTexture;
+uniform float uCutoutThreshold;
+uniform bool uCutoutBlend;
+
 /// The view space position.
 in vec4 vPosition;
 
@@ -84,7 +89,7 @@ vec3 bumpNormal(float dt, float scale) {
 
 /**
  * Re-orient the bump map normal so that the normal
- * from the texture map is up instead of the Z-axis.
+ * from the normal map is up instead of the Z-axis.
  */
 vec3 bumpRotate(vec3 n, vec3 bn) {
 	/*
@@ -127,7 +132,7 @@ vec3 bumpRotate(vec3 n, vec3 bn) {
 	float z = bn.z;
 
 	/*
-	 * rotate the bumpped normal:
+	 * rotate the bump map normal:
 	 *	Q * bn * conjugate(Q)
 	 */
 	return vec3(
@@ -151,8 +156,8 @@ void main() {
 			float dt = 1.0 / float(textureSize(uBumpTexture, 0).s);
 			float scale = uBumpStrength * vTexScale;
 			vec3 bn = bumpNormal(dt, scale);
-			//tn = normalize(mix(tn, bn, 0.5));
-			tn = normalize(tn + bumpRotate(tn, bn));
+			//tn = normalize(tn + bumpRotate(tn, bn));
+			tn = bumpRotate(tn, bn);
 		}
 		normal = normalize(tm * tn);
 	}
@@ -179,9 +184,23 @@ void main() {
 		specular = clamp(uAmbientColor + uLightColor, 0.0, 1.0) * spec;
 	}
 
-	vec3 color = ambient + diffuse + specular;
+	vec4 color = vec4(ambient + diffuse + specular, 1.0);
 	if (uToneMap) {
-		color = ACESFilm(color, uToneMapScale);
+		color.rgb = ACESFilm(color.rgb, uToneMapScale);
 	}
-	fColor = vec4(toGamma(color), 1.0);
+
+	if (uHasCutoutTexture) {
+		float alpha = texture(uCutoutTexture, vTexCoord).r;
+		if (uCutoutBlend) {
+			/* alpha blend pass */
+			color = vec4(color.rgb * alpha, alpha);
+		} else {
+			/* depth path */
+			if (alpha < uCutoutThreshold) {
+				discard;
+			}
+		}
+	}
+
+	fColor = toGamma(color);
 }
