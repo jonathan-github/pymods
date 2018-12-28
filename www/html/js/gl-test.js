@@ -55,6 +55,7 @@ var App = utils.extend(utils.WebVR, {
         this.figureMesh = GL.MeshDqs.create({
             name: "figure",
             mesh: figure.get(this.library),
+            basePose: figure.config.basePose,
             meshUniforms: figure.config.meshUniforms,
             materialUniforms: figure.config.materialUniforms
         });
@@ -68,7 +69,8 @@ var App = utils.extend(utils.WebVR, {
                 name: "hair",
                 mesh: hair.get(this.library),
                 meshUniforms: hair.config.meshUniforms,
-                materialUniforms: hair.config.materialUniforms
+                materialUniforms: hair.config.materialUniforms,
+                baseFigure: hair.config.baseFigure
             });
             this.hairMesh.ENABLE = true;
             this.hairMesh.parent = this.figureMesh;
@@ -151,8 +153,10 @@ var App = utils.extend(utils.WebVR, {
         this.poses = [];
         var poses = assets.poses;
         for (i = 0, n = poses.length; i < n; ++i) {
-            var pose = poses[i];
-            this.poses.push(this.posePatch(pose));
+            var pose = utils.PoseConverter.convert(
+                poses[i], this.figureMesh.baseFigure
+            );
+            this.poses.push(pose);
         }
         this.poseSelect(this.poses[0]);
 
@@ -164,23 +168,6 @@ var App = utils.extend(utils.WebVR, {
         /* release the library and texture cache (only needed during loading) */
         this.library = null;
         this.textureCache = null;
-    },
-
-    posePatch: function(pose) {
-        var name = pose.config.name;
-        var keyFrames = pose.responseJSON();
-        return {
-            name: name,
-            keyFrames: keyFrames
-        };
-    },
-    poseScale: function(keys, scale) {
-        var scaled = [];
-        for (var i = 0, n = keys.length; i < n; ++i) {
-            var key = keys[i];
-            scaled.push([key[0], key[1] * scale]);
-        }
-        return scaled;
     },
 
     textureGet: function(image, config) {
@@ -213,14 +200,7 @@ var App = utils.extend(utils.WebVR, {
         }
         this.pose = pose;
 
-        var basePose = {
-            CTRLVictoria7: 0.65,
-            FHMKaren7: 1.0,
-            PBMBreastsSize: 0.25,
-            PBMNipples: 0.5,
-            PBMNavel: 1.0,
-            FBMVoluptuous: 0.30
-        };
+        var basePose = this.figureMesh.config.basePose || {};
         for (var i = 0, n = this.meshes.length; i < n; ++i) {
             var mesh = this.meshes[i];
             var animMap = mesh.animMap;
@@ -230,7 +210,8 @@ var App = utils.extend(utils.WebVR, {
             var anim = mesh.animMap[pose.name];
             if (!anim) {
                 anim = utils.KeyFrameMapSampler.create(
-                    pose.keyFrames, mesh, basePose
+                    pose.keyFrames, mesh,
+                    mesh.config.basePose || basePose
                 );
                 mesh.animMap[pose.name] = anim;
             }
@@ -251,6 +232,7 @@ var App = utils.extend(utils.WebVR, {
 	    mouseover: this.mouseOverEvent,
 	    mouseout: this.mouseOutEvent,
 	    wheel: this.wheelEvent,
+            keypress: this.keyPressEvent,
 	    scope: this
 	});
 
@@ -628,7 +610,7 @@ var App = utils.extend(utils.WebVR, {
         if (event.shiftKey) {
             /* change elevation */
             var elevationMax = this.elevationMax;
-            var elevation= this.elevation[1] + (event.deltaY < 0 ? 3 : -3);
+            var elevation = this.elevation[1] + (event.deltaY < 0 ? 3 : -3);
             if (elevation < -elevationMax) {
                 elevation = -elevationMax;
             }
@@ -647,6 +629,35 @@ var App = utils.extend(utils.WebVR, {
             this.scale = scale;
         }
         this.animResync = true;
+    },
+
+    keyPressEvent: function(event) {
+        switch (event.key) {
+        case 'r':
+            // reset view
+            this.pitch = 0;
+            this.yaw = 0;
+            this.scale = 1;
+            vec3.set(this.elevation, 0.0,0.0,0.0);
+            this.animResync = true;
+            break;
+        case ' ':
+            // step frame
+            if (this.ANIMATION_SPEED != 0) {
+                this.uiAnimSpeed.value = '0';
+                this.uiAnimSpeedInput();
+            } else {
+                var dt = 1.0/60.0;
+                if (event.shiftKey) {
+                    dt = -dt;
+                }
+                if ((this.animateTime += dt) < 0) {
+                    this.animateTime = undefined;
+                }
+                this.animResync = true;
+            }
+            break;
+        }
     },
 
     resize: function() {
