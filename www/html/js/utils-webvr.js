@@ -145,13 +145,26 @@ utils.WebVR = utils.extend(utils.App, {
     },
     vrToggle: function() {
         if (this.vrRunning) {
-            console.log("vrExit");
-            this.vrExit();
-        } else if (this.vrDisplay) {
+            this.vrOff();
+        } else {
+            this.vrOn();
+        }
+    },
+    vrOn: function() {
+        if (this.vrRunning) {
+            return;
+        }
+        if (this.vrDisplay) {
             console.log("vrStart");
             this.vrStart();
         } else {
 	    alert("WebVR is not supported in this browser.");
+        }
+    },
+    vrOff: function() {
+        if (this.vrRunning) {
+            console.log("vrExit");
+            this.vrExit();
         }
     },
 
