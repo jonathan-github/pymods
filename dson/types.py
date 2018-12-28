@@ -882,7 +882,8 @@ class GeometryInstance(Object):
     propDefs = PropDefs(Geometry.propDefs, {
         'url': PD_InstDef,
         # undocumented
-        'current_subdivision_level': PD_Value
+        'current_subdivision_level': PD_Value,
+        'subd_normal_smoothing_mode': PD_Value
     })
 
     def __init__(self, srcData, parent=None):
