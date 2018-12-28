@@ -33,6 +33,9 @@ vec4 toGamma(vec4 c) {
 
 // https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
 vec3 ACESFilm(vec3 x, float scale) {
+	if (scale == 0.0) {
+		return x;
+	}     		   
 	const float a = 2.51;
 	const float b = 0.03;
 	const float c = 2.43;
