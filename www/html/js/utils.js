@@ -34,6 +34,52 @@ utils.assertThrow = function(condition, message) {
 utils.assert = utils.assertThrow;
 
 /**
+ * Format the string.
+ */
+utils.format = function(fmt, args) {
+    var output = "";
+    var len = fmt.length;
+    var start = 0;
+    while (start < len) {
+        var i = fmt.indexOf('{', start);
+        if (i >= 0 && i + 1 < len) {
+            output += fmt.substring(start, i);
+            if (fmt[i + 1] == '{') {
+                /* escape */
+                output += '{';
+                start = i + 2;
+                continue;
+            } else {
+                /* parameter */
+                var j = fmt.indexOf('}', i + 1);
+                utils.assert && utils.assert(
+                    j >= 0,
+                    "missing closing brace for format parameter",
+                    fmt, i
+                );
+                if (j >= 0) {
+                    var key = fmt.substring(i + 1, j);
+                    var val = args && args[key];
+                    utils.assert && utils.assert(
+                        val != undefined,
+                        "undefined format parameter",
+                        fmt, i, key
+                    );
+                    if (val != undefined) {
+                        output += val.toString();
+                    }
+                    start = j + 1;
+                    continue;
+                }
+            }
+        }
+        output += fmt.substring(start);
+        break;
+    }
+    return output;
+};
+
+/**
  * Merge the properties into the object.
  * @param {object} object the object
  * @param {object} props the properties to merge
@@ -284,6 +330,37 @@ utils.arrayMax = function(ary, offset, stride, count) {
  */
 utils.arrayMin = function(ary, offset, stride, count) {
     return utils.arrayReduce(ary, Math.min, undefined, offset, stride, count);
+};
+
+/*
+ * https://jsfiddle.net/aryzhov/pkfst550/
+ * Binary search in JavaScript.
+ * Returns the index of of the element in a sorted array or (-n-1) where n is the insertion point for the new element.
+ * Parameters:
+ *     ar - A sorted array
+ *     el - An element to search for
+ *     compare_fn - A comparator function. The function takes two arguments: (a, b) and returns:
+ *        a negative number  if a is less than b;
+ *        0 if a is equal to b;
+ *        a positive number of a is greater than b.
+ * The array may contain duplicate elements. If there are more than one equal elements in the array, 
+ * the returned value can be the index of any one of the equal elements.
+ */
+utils.arraySearch = function(ar, el, compare_fn) {
+    var m = 0;
+    var n = ar.length - 1;
+    while (m <= n) {
+        var k = (n + m) >> 1;
+        var cmp = compare_fn(el, ar[k]);
+        if (cmp > 0) {
+            m = k + 1;
+        } else if(cmp < 0) {
+            n = k - 1;
+        } else {
+            return k;
+        }
+    }
+    return -m - 1;
 };
 
 /**
@@ -1479,9 +1556,33 @@ utils.AssetBatch = utils.extend(utils.AssetRequest, {
                 this.error("unknown asset type " + type);
                 return false;
             }
-            var asset = assetType.create(req.config);
-            this.loader.append(asset);
-            this.batch.push({ req: req, asset: asset });
+            if (type == 'AssetRequest' && req.series) {
+                var start = req.series[0];
+                var end = req.series[1];
+                var zeroPad = req.zeroPad || 0;
+                while (start <= end) {
+                    var sn = start.toFixed();
+                    var pad = zeroPad - sn.length;
+                    while (pad-- > 0) {
+                        sn = '0' + sn;
+                    }
+                    var reqSn = utils.merge({}, req);
+                    reqSn.config = utils.merge({}, reqSn.config);
+                    var args = {
+                        '#': sn
+                    };
+                    reqSn.config.name = utils.format(reqSn.config.name, args);
+                    reqSn.config.url = utils.format(reqSn.config.url, args);
+                    var asset = assetType.create(reqSn.config);
+                    this.loader.append(asset);
+                    this.batch.push({ req: reqSn, asset: asset });
+                    ++start;
+                }
+            } else {
+                var asset = assetType.create(req.config);
+                this.loader.append(asset);
+                this.batch.push({ req: req, asset: asset });
+            }
         }
         return true;
     }
@@ -1497,7 +1598,8 @@ utils.AssetWasm = utils.extend(utils.AssetFetch, {
     },
 
     process: function(response) {
-        if (response.url.startsWith("file:")) {
+        if (response.url.startsWith("file:") ||
+            response.headers.get('Content-Type') == "application/octet-stream") {
             /*
              * WebAssembly compileStreaming or instantiateStreaming
              * reject with an unsupported MIME type error when
@@ -1669,15 +1771,19 @@ utils.AppBase = {
     /// resize delay in msec
     RESIZE_DELAY: 500,
 
-    initCanvas: function() {
+    initCanvas: function(config) {
 	if (this.canvas) {
 	    return;
 	}
 	this.initLoader();
 	this.canvas = document.createElement('canvas');
+        if (config && config.id) {
+            this.canvas.id = config.id;
+        }
 	this.canvas.style.display = 'block';
 	utils.userSelectSet(this.canvas, 'none');
-	document.body.appendChild(this.canvas);
+        var parent = (config && config.parent) || document.body;
+        parent.appendChild(this.canvas);
 	if (this.initContext) {
 	    this.initContext();
 	}
