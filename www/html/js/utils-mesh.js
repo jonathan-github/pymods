@@ -507,8 +507,6 @@ if (false) {
 
 	// Gram-Schmidt orthogonalize
 
-	var t2 = (tx * tx + ty * ty + tz * tz);
-
 	// t' = t - n * dot(n, t)
 	var dot = nx * tx + ny * ty + nz * tz;
 	tx -= nx * dot;
