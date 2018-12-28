@@ -128,26 +128,10 @@ float KS_Skin_Specular(vec3 N, vec3 L, vec3 V, float m, float rho_s)
 #ifdef BUMP_NORMAL
 
 vec3 quadNormal(vec3 v0, vec3 v1, vec3 v2, vec3 v3) {
-	vec3 n = vec3(
-		(v0.y - v1.y) * (v0.z + v1.z),
-		(v0.z - v1.z) * (v0.x + v1.x),
-		(v0.x - v1.x) * (v0.y + v1.y)
-	);
-	n += vec3(
-		(v1.y - v2.y) * (v1.z + v2.z),
-		(v1.z - v2.z) * (v1.x + v2.x),
-		(v1.x - v2.x) * (v1.y + v2.y)
-	);
-	n += vec3(
-		(v2.y - v3.y) * (v2.z + v3.z),
-		(v2.z - v3.z) * (v2.x + v3.x),
-		(v2.x - v3.x) * (v2.y + v3.y)
-	);
-	n += vec3(
-		(v3.y - v0.y) * (v3.z + v0.z),
-		(v3.z - v0.z) * (v3.x + v0.x),
-		(v3.x - v0.x) * (v3.y + v0.y)
-	);
+	vec3 n = (v0 - v1).yzx * (v0 + v1).zxy +
+		 (v1 - v2).yzx * (v1 + v2).zxy +
+		 (v2 - v3).yzx * (v2 + v3).zxy +
+		 (v3 - v0).yzx * (v3 + v0).zxy;
 	//return normalize(n);
 	return n;
 }
@@ -228,6 +212,8 @@ void main() {
 	vec4 color;
 	if (uHasDiffuseTexture) {
 		color = texture2D(uDiffuseTexture, uv);
+		// TBD: multiply by vColor?
+		//color.rgb *= vColor;
 	} else {
 		color = vec4(vColor, 1.0);
 	}
