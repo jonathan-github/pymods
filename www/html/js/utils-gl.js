@@ -2694,10 +2694,7 @@ GL.Framebuffer = utils.extend(utils.Object, {
     checkStatus: function(target) {
         var context = App.context;
         var gl = context.gl;
-        if (target == undefined) {
-            target = this.config && this.config.target || gl.DRAW_FRAMEBUFFER;
-        }
-        context.bindFramebuffer(target, this);
+        this.bind();
         var status = gl.checkFramebufferStatus(target);
         (utils.debug || this.debug) && console.log(
             this.name,
